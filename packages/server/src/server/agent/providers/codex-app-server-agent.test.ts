@@ -21,6 +21,7 @@ import type {
 import {
   buildCodexAppServerEnv,
   CodexAppServerAgentClient,
+  codexImportedSessionConfig,
   CodexAppServerAgentSession,
   codexMicrosoftStoreBinaryCandidates,
   codexAppServerTurnInputFromPrompt,
@@ -31,6 +32,125 @@ import {
   normalizeCodexOutputSchema,
   toAgentUsage,
 } from "./codex-app-server-agent.js";
+
+describe("Codex imported settings", () => {
+  test("imports native settings before resuming with daemon defaults", async () => {
+    const native = {
+      model: "gpt-6-astra",
+      reasoningEffort: "high",
+      approvalPolicy: "never",
+      sandbox: { type: "dangerFullAccess" },
+      thread: { name: "Imported" },
+    };
+    const request = vi.fn(async (method: string) => (method === "thread/resume" ? native : {}));
+    const dispose = vi.fn(async () => {});
+    const provider = new CodexAppServerAgentClient(createTestLogger(), undefined, {
+      _createCodexClient: () => ({ request, notify: () => {}, dispose }),
+    });
+    castInternals<{ spawnAppServer: () => Promise<ChildProcessWithoutNullStreams> }>(
+      provider,
+    ).spawnAppServer = async () => new EventEmitter() as ChildProcessWithoutNullStreams;
+    const session = createSession();
+    vi.spyOn(session, "streamHistory").mockImplementation(async function* () {});
+    const resume = vi.spyOn(provider, "resumeSession").mockResolvedValue(session);
+    const defaults = createConfig({
+      model: "gpt-6.1-sol",
+      thinkingOptionId: "low",
+      modeId: "auto-review",
+    });
+    const imported = await provider.importSession(
+      { providerHandleId: "native-id", cwd: defaults.cwd },
+      { config: defaults, storedConfig: defaults },
+    );
+    expect(request).toHaveBeenCalledWith("thread/resume", {
+      threadId: "native-id",
+      excludeTurns: true,
+    });
+    expect(resume.mock.calls[0][1]).toMatchObject({
+      model: "gpt-6-astra",
+      thinkingOptionId: "high",
+      modeId: "full-access",
+    });
+    expect(imported.config).toMatchObject({
+      model: "gpt-6-astra",
+      thinkingOptionId: "high",
+      modeId: "full-access",
+      title: "Imported",
+    });
+    expect(imported.persistence.metadata).toMatchObject({
+      model: "gpt-6-astra",
+      thinkingOptionId: "high",
+      modeId: "full-access",
+    });
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+  test("preserves named full-access sessions over new-agent defaults", () => {
+    expect(
+      codexImportedSessionConfig(
+        {
+          model: "gpt-6-astra",
+          reasoningEffort: "high",
+          approvalPolicy: "never",
+          approvalsReviewer: "user",
+          sandbox: { type: "dangerFullAccess" },
+          thread: { name: "Home Assistant" },
+        },
+        { approval_policy: "on-request", sandbox_mode: "workspace-write" },
+      ),
+    ).toEqual({
+      model: "gpt-6-astra",
+      thinkingOptionId: "high",
+      modeId: "full-access",
+      title: "Home Assistant",
+      providerOptions: {},
+    });
+  });
+  test("preserves workspace roots, network restrictions and reviewer", () => {
+    expect(
+      codexImportedSessionConfig({
+        model: "gpt-5.5",
+        reasoningEffort: "xhigh",
+        approvalPolicy: "on-request",
+        approvalsReviewer: "auto_review",
+        sandbox: {
+          type: "workspaceWrite",
+          writableRoots: ["/repo", "/memory"],
+          networkAccess: false,
+          excludeSlashTmp: true,
+          excludeTmpdirEnvVar: true,
+        },
+        thread: { name: null },
+      }),
+    ).toEqual({
+      model: "gpt-5.5",
+      thinkingOptionId: "xhigh",
+      modeId: "auto-review",
+      providerOptions: {
+        sandbox_workspace_write: {
+          writable_roots: ["/repo", "/memory"],
+          network_access: false,
+          exclude_slash_tmp: true,
+          exclude_tmpdir_env_var: true,
+        },
+      },
+    });
+  });
+  test("retains non-preset approval policies and rejects unsupported sandbox conversions", () => {
+    const response = {
+      model: "gpt-6-astra",
+      reasoningEffort: "low",
+      approvalPolicy: "untrusted",
+      sandbox: { type: "readOnly" },
+      thread: { name: null },
+    };
+    expect(codexImportedSessionConfig(response).providerOptions).toEqual({
+      approval_policy: "untrusted",
+    });
+    expect(() =>
+      codexImportedSessionConfig({ ...response, sandbox: { type: "externalSandbox" } }),
+    ).toThrow();
+  });
+});
 
 describe("mapCodexPlanUpdateToTodo", () => {
   test("preserves checklist progress without creating a plan card", () => {

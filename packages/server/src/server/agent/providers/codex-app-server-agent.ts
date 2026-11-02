@@ -371,6 +371,48 @@ function shouldPromoteThreadResponseToAutoReview(params: {
   );
 }
 
+export function codexImportedSessionConfig(
+  response: unknown,
+  existingOptions: AgentSessionConfig["providerOptions"] = {},
+): Partial<AgentSessionConfig> {
+  const result = z
+    .object({
+      model: z.string().min(1),
+      reasoningEffort: z.string().nullable().optional(),
+      approvalPolicy: CodexProviderOptionsSchema.shape.approval_policy.unwrap(),
+      approvalsReviewer: z.string().optional(),
+      sandbox: z
+        .object({ type: z.enum(["readOnly", "workspaceWrite", "dangerFullAccess"]) })
+        .passthrough(),
+      thread: z.object({ name: z.string().nullable().optional() }),
+    })
+    .parse(response);
+  let modeId = "read-only";
+  if (result.sandbox.type === "dangerFullAccess") modeId = "full-access";
+  if (result.sandbox.type === "workspaceWrite") {
+    modeId = isAutoReviewReviewer(result.approvalsReviewer) ? "auto-review" : "auto";
+  }
+  const options = CodexProviderOptionsSchema.parse(existingOptions);
+  delete options.sandbox_workspace_write;
+  delete options.approval_policy;
+  delete options.sandbox_mode;
+  const workspaceWrite =
+    result.sandbox.type === "workspaceWrite" ? readSandboxWorkspaceWrite(result.sandbox) : null;
+  return {
+    model: result.model,
+    thinkingOptionId: result.reasoningEffort ?? undefined,
+    modeId,
+    ...(result.thread.name ? { title: result.thread.name } : {}),
+    providerOptions: {
+      ...options,
+      ...(result.approvalPolicy !== MODE_PRESETS[modeId].approvalPolicy
+        ? { approval_policy: result.approvalPolicy }
+        : {}),
+      ...(workspaceWrite ? { sandbox_workspace_write: workspaceWrite } : {}),
+    },
+  };
+}
+
 function validateCodexMode(modeId: string): void {
   if (!(modeId in MODE_PRESETS)) {
     const validModes = Object.keys(MODE_PRESETS).join(", ");
@@ -7722,10 +7764,29 @@ export class CodexAppServerAgentClient implements AgentClient {
   }
 
   async importSession(input: ImportProviderSessionInput, context: ImportProviderSessionContext) {
+    const child = await this.spawnAppServer();
+    const client =
+      this.deps._createCodexClient?.(child, this.logger, () => ({})) ??
+      new CodexAppServerClient(child, this.logger);
+    let nativeConfig: Partial<AgentSessionConfig>;
+    try {
+      await client.request("initialize", buildCodexAppServerInitializeParams());
+      client.notify("initialized", {});
+      // Read the thread's effective settings before applying Paseo's new-agent defaults.
+      // A plain resume preserves native model, effort and permissions, and runs no turn.
+      const response = await client.request("thread/resume", {
+        threadId: input.providerHandleId,
+        excludeTurns: true,
+      });
+      nativeConfig = codexImportedSessionConfig(response, context.config.providerOptions);
+    } finally {
+      await client.dispose();
+    }
     return importSessionFromPersistence({
       provider: CODEX_PROVIDER,
       request: input,
       context,
+      config: nativeConfig,
       resumeSession: this.resumeSession.bind(this),
     });
   }
