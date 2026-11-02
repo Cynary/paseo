@@ -4627,6 +4627,72 @@ test("import_agent_request imports into the workspace that opened the import she
   expect(workspaceCreated).toBe(false);
 });
 
+test("import_agent_request derives child placement from its verified parent without a client cwd", async () => {
+  const emitted: SessionOutboundMessage[] = [];
+  const session = createSessionForWorkspaceTests({ onMessage: (message) => emitted.push(message) });
+  const parent = makeManagedAgent({
+    id: "parent-agent",
+    cwd: REPO_CWD,
+    workspaceId: "ws-repo-running",
+    lifecycle: "idle",
+    updatedAt: "2026-05-21T00:00:00.000Z",
+  });
+  session.agentManager.getAgent = (id) => (id === parent.id ? parent : null);
+  Object.assign(session.agentManager, {
+    waitForAgentClose: async () => {},
+    getProviderSubagent: (parentId: string, childId: string) =>
+      parentId === parent.id && childId === "native-child"
+        ? { id: childId, provider: "codex", title: "hello", parentAgentId: parentId }
+        : null,
+  });
+  session.projectRegistry.get = async () =>
+    createPersistedProjectRecord({
+      projectId: "proj-repo-running",
+      rootPath: REPO_CWD,
+      kind: "non_git",
+      displayName: "repo",
+      createdAt: "2026-03-01T12:00:00.000Z",
+      updatedAt: "2026-03-01T12:00:00.000Z",
+    });
+  let imported: unknown;
+  session.agentManager.importProviderSession = async (input) => {
+    imported = input;
+    return makeManagedAgent({
+      id: "managed-child",
+      cwd: REPO_CWD,
+      workspaceId: "ws-repo-running",
+      lifecycle: "idle",
+      updatedAt: "2026-05-21T00:00:00.000Z",
+    });
+  };
+  session.agentManager.getTimeline = () => [];
+  session.agentStorage.list = async () => [];
+  session.agentStorage.get = async () => null;
+  session.agentUpdates.forwardLiveAgent = async () => undefined;
+  await session.handleMessage({
+    type: "import_agent_request",
+    requestId: "child-without-cwd",
+    providerId: "codex",
+    providerHandleId: "native-child",
+    parentAgentId: parent.id,
+  });
+  expect(
+    filterByType(emitted, "status").filter(
+      (message) => message.payload.status === "agent_create_failed",
+    ),
+  ).toEqual([]);
+  expect(imported).toMatchObject({
+    providerHandleId: "native-child",
+    cwd: REPO_CWD,
+    workspaceId: "ws-repo-running",
+    preserveNativeThread: true,
+    title: "hello",
+  });
+  expect(
+    filterByType(emitted, "status").some((message) => message.payload.status === "agent_resumed"),
+  ).toBe(true);
+});
+
 test("import_agent_request maps an import failure to agent_create_failed", async () => {
   const emitted: SessionOutboundMessage[] = [];
   const session = createSessionForWorkspaceTests({

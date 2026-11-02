@@ -4709,7 +4709,7 @@ export class Session {
     );
 
     try {
-      if (!normalized.cwd) {
+      if (!normalized.cwd && !normalized.parentAgentId) {
         throw new Error("Import requires cwd from the selected provider session");
       }
       const { snapshot, timelineSize, createdWorkspace } = await importProviderSession({
