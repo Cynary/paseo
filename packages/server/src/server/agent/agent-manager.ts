@@ -896,6 +896,45 @@ export class AgentManager {
     this.acceptingAgentRegistrations = false;
   }
 
+  private paseoMcpRefresh: Promise<void> = Promise.resolve();
+
+  async findCodexAgentId(sessionId: string): Promise<string | undefined> {
+    const loaded = this.listAgents({ includeInternal: true }).find(
+      (agent) =>
+        agent.persistence?.provider === "codex" && agent.persistence.sessionId === sessionId,
+    );
+    if (loaded) return loaded.id;
+    const records = await this.requireRegistry().list();
+    return records.find(
+      (record) =>
+        record.persistence?.provider === "codex" && record.persistence.sessionId === sessionId,
+    )?.id;
+  }
+
+  refreshPaseoMcpServers(): Promise<void> {
+    const enabled = this.paseoToolsEnabled && this.mcpBaseUrl !== null;
+    const server = enabled
+      ? {
+          type: "http" as const,
+          url: `${this.mcpBaseUrl}?callerProvider=codex`,
+          ...(this.mcpAuthToken
+            ? { headers: { Authorization: `Bearer ${this.mcpAuthToken}` } }
+            : {}),
+        }
+      : null;
+    // Serialize rapid toggles; an older reload must never win over a newer one.
+    const refresh = this.paseoMcpRefresh
+      .catch(() => {})
+      .then(async () => {
+        for (const client of this.clients.values()) {
+          await client.refreshPaseoMcpServer?.(server);
+        }
+        return;
+      });
+    this.paseoMcpRefresh = refresh;
+    return refresh;
+  }
+
   setPaseoToolsEnabled(enabled: boolean): void {
     this.paseoToolsEnabled = enabled;
   }

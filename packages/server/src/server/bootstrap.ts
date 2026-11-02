@@ -1610,15 +1610,16 @@ export async function createPaseoDaemon(
   {
     const agentMcpRoute = "/mcp/agents";
 
-    const createAgentMcpSession = async (callerAgentId?: string) => {
-      const agentMcpServer = await createAgentMcpServer(
-        createAgentToolHostDependencies({
+    const createAgentMcpSession = async (callerAgentId?: string, agentManifest = false) => {
+      const agentMcpServer = await createAgentMcpServer({
+        ...createAgentToolHostDependencies({
           callerAgentId,
           paseoToolPolicy: callerAgentId
             ? agentManager.getPaseoToolPolicy(callerAgentId)
             : undefined,
         }),
-      );
+        agentManifest,
+      });
 
       // Stateless mode: each HTTP request builds a fresh server + transport that is
       // torn down when the response closes, so no per-session state is retained between
@@ -1639,6 +1640,34 @@ export async function createPaseoDaemon(
 
       await agentMcpServer.connect(transport);
       return { server: agentMcpServer, transport };
+    };
+
+    const resolveAgentMcpCaller = async (req: express.Request, res: express.Response) => {
+      const callerAgentIdRaw = req.query.callerAgentId;
+      let callerAgentId: string | undefined;
+      if (typeof callerAgentIdRaw === "string") {
+        callerAgentId = callerAgentIdRaw;
+      } else if (Array.isArray(callerAgentIdRaw) && typeof callerAgentIdRaw[0] === "string") {
+        callerAgentId = callerAgentIdRaw[0];
+      }
+      const sharedCodex = req.query.callerProvider === "codex";
+      if (sharedCodex && !callerAgentId && req.body?.method === "tools/call") {
+        const threadId = req.body?.params?._meta?.threadId;
+        callerAgentId =
+          typeof threadId === "string" ? await agentManager.findCodexAgentId(threadId) : undefined;
+        if (!callerAgentId) {
+          res.status(200).json({
+            jsonrpc: "2.0",
+            id: req.body.id ?? null,
+            error: {
+              code: -32602,
+              message: "Codex thread is not registered in Paseo",
+            },
+          });
+          return null;
+        }
+      }
+      return { callerAgentId, sharedCodex };
     };
 
     const runAgentMcpRequest = async (
@@ -1690,14 +1719,10 @@ export async function createPaseoDaemon(
           });
           return;
         }
-        const callerAgentIdRaw = req.query.callerAgentId;
-        let callerAgentId: string | undefined;
-        if (typeof callerAgentIdRaw === "string") {
-          callerAgentId = callerAgentIdRaw;
-        } else if (Array.isArray(callerAgentIdRaw) && typeof callerAgentIdRaw[0] === "string") {
-          callerAgentId = callerAgentIdRaw[0];
-        }
-        const { server, transport } = await createAgentMcpSession(callerAgentId);
+        const caller = await resolveAgentMcpCaller(req, res);
+        if (!caller) return;
+        const { callerAgentId, sharedCodex } = caller;
+        const { server, transport } = await createAgentMcpSession(callerAgentId, sharedCodex);
         res.on("close", () => {
           void transport.close();
           void server.close();
@@ -1778,17 +1803,25 @@ export async function createPaseoDaemon(
               !mcpEnabled || config.mcpInjectIntoAgents === false ? null : mcpBaseUrl;
             agentManager.setMcpBaseUrl(agentMcpBaseUrl);
             agentManager.setPaseoToolsEnabled(mcpEnabled && config.mcpInjectIntoAgents !== false);
+            const refreshPaseoMcpServers = () => {
+              void agentManager.refreshPaseoMcpServers().catch((err) => {
+                logger.error({ err }, "Failed to refresh Paseo tools in loaded Codex threads");
+              });
+            };
+            refreshPaseoMcpServers();
             daemonConfigStore.onFieldChange("mcp.enabled", (value) => {
               mcpEnabled = value !== false;
               const inject = daemonConfigStore.get().mcp.injectIntoAgents !== false;
               agentManager.setMcpBaseUrl(mcpEnabled && inject ? mcpBaseUrl : null);
               agentManager.setPaseoToolsEnabled(mcpEnabled && inject);
               setAgentProviderToolsEnabled(mcpEnabled && inject);
+              refreshPaseoMcpServers();
             });
             daemonConfigStore.onFieldChange("mcp.injectIntoAgents", (value) => {
               agentManager.setMcpBaseUrl(mcpEnabled && value ? mcpBaseUrl : null);
               agentManager.setPaseoToolsEnabled(mcpEnabled && value !== false);
               setAgentProviderToolsEnabled(mcpEnabled && value !== false);
+              refreshPaseoMcpServers();
             });
             daemonConfigStore.onFieldChange("appendSystemPrompt", (value) => {
               agentManager.setAppendSystemPrompt(typeof value === "string" ? value : "");

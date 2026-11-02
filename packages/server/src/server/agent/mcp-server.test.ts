@@ -903,6 +903,36 @@ async function createAgentMcpServer(
   return server;
 }
 
+describe("shared Codex MCP manifest", () => {
+  it("advertises the same agent inputs before caller metadata is available", async () => {
+    const options = {
+      agentManager: new BoundaryAgentManagerFake() as AgentManager,
+      agentStorage: new BoundaryAgentStorageFake() as AgentStorage,
+      providerSnapshotManager:
+        new BoundaryProviderSnapshotManagerFake() as unknown as ProviderSnapshotManager,
+      logger: createTestLogger(),
+    };
+    const shared = await createAgentMcpServer({
+      ...options,
+      agentManifest: true,
+    });
+    const bound = await createAgentMcpServer({
+      ...options,
+      callerAgentId: "agent-1",
+    });
+    const sharedClient = await connectInMemoryMcpClient(shared);
+    const boundClient = await connectInMemoryMcpClient(bound);
+    try {
+      expect((await sharedClient.listTools()).tools).toEqual((await boundClient.listTools()).tools);
+    } finally {
+      await sharedClient.close();
+      await boundClient.close();
+      await shared.close();
+      await bound.close();
+    }
+  });
+});
+
 describe("bundled Paseo skill", () => {
   it("documents only advertised create_workspace input names", async () => {
     const server = await createAgentMcpServer({

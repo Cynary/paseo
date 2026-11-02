@@ -3460,6 +3460,7 @@ interface CodexSubAgentCallState {
   pendingCommandOutputDeltas: Map<string, string[]>;
   pendingFileChangeOutputDeltas: Map<string, string[]>;
   childThreadIds: Set<string>;
+  subtitle?: string;
 }
 
 function resolveCodexParentSubagentId(
@@ -3558,6 +3559,8 @@ export class CodexAppServerAgentSession implements AgentSession {
   private emittedItemStartedIds = new Set<string>();
   private emittedItemCompletedIds = new Set<string>();
   private emittedProviderSubagentUserMessageKeys = new Set<string>();
+  private attachedSubagentThreadIds = new Set<string>();
+  private hydratedSubagentTextItems = new Map<string, string>();
   private subAgentCallsByCallId = new Map<string, CodexSubAgentCallState>();
   private subAgentCallIdByChildThreadId = new Map<string, string>();
   private pendingSubAgentNotificationsByThreadId = new Map<string, ParsedCodexNotification[]>();
@@ -4102,6 +4105,20 @@ export class CodexAppServerAgentSession implements AgentSession {
     client: CodexAppServerClientLike,
     rootRoutes: readonly PersistedSubAgentRoute[],
   ): Promise<void> {
+    if (rootRoutes.length === 0) return;
+    // Reattach only children already loaded by Codex. Reading old conversations must
+    // not restart every completed worker in their history.
+    let loadedThreadIds = new Set<string>();
+    try {
+      const loaded = toObjectRecord(await client.request("thread/loaded/list", {}));
+      loadedThreadIds = new Set(
+        Array.isArray(loaded?.data)
+          ? loaded.data.filter((id): id is string => typeof id === "string")
+          : [],
+      );
+    } catch {
+      // Older app-servers can still provide read-only persisted child history.
+    }
     const queue = rootRoutes.map((route) => ({
       route,
       parentCallId: null as string | null,
@@ -4128,6 +4145,9 @@ export class CodexAppServerAgentSession implements AgentSession {
         });
         for (const entry of childHistory.timeline) {
           this.emitProviderSubagentTimeline(next.route.childThreadId, entry.item, entry.timestamp);
+        }
+        if (loadedThreadIds.has(next.route.childThreadId)) {
+          await this.attachProviderSubagent(next.route.childThreadId, false);
         }
         for (const route of childHistory.subAgentRoutes) {
           queue.push({
@@ -5775,6 +5795,11 @@ export class CodexAppServerAgentSession implements AgentSession {
     parsed: ParsedCodexNotification,
     callId: string,
   ): Promise<void> {
+    if (
+      (parsed.kind === "agent_message_delta" || parsed.kind === "reasoning_delta") &&
+      this.hydratedSubagentTextItems.has(parsed.itemId)
+    )
+      return;
     switch (parsed.kind) {
       case "thread_started":
         this.emitSubAgentActivityUpdate(callId, "running", { reopen: true });
@@ -5904,8 +5929,68 @@ export class CodexAppServerAgentSession implements AgentSession {
     pending.push(parsed);
   }
 
+  /** Subscribe to canonical child events; legacy command events alone omit its conversation. */
+  private async attachProviderSubagent(threadId: string, recoverHistory = true): Promise<void> {
+    if (!this.client || this.attachedSubagentThreadIds.has(threadId)) return;
+    try {
+      // Do not pass the parent's model, instructions, or permissions to a parent-owned child.
+      const response = toObjectRecord(
+        await this.client.request("thread/resume", {
+          threadId,
+          excludeTurns: true,
+        }),
+      );
+      if (toObjectRecord(response?.thread)?.id !== threadId) return;
+      this.attachedSubagentThreadIds.add(threadId);
+      const model = typeof response?.model === "string" ? response.model : null;
+      const effort =
+        typeof response?.reasoningEffort === "string" ? response.reasoningEffort : null;
+      if (model) {
+        const state = this.subAgentCallsByCallId.get(
+          this.subAgentCallIdByChildThreadId.get(threadId) ?? "",
+        );
+        if (state) {
+          state.subtitle = effort ? `${model} · ${effort}` : model;
+          this.emitProviderSubagentUpsert(threadId, state, state.toolCall.status);
+        }
+      }
+      if (!recoverHistory) return;
+      await this.recoverProviderSubagentMessages(this.client, threadId);
+    } catch (error) {
+      this.logger.debug({ err: error, threadId }, "Unable to attach Codex subagent conversation");
+    }
+  }
+
+  private async recoverProviderSubagentMessages(
+    client: CodexAppServerClientLike,
+    threadId: string,
+  ): Promise<void> {
+    // The delegated prompt predates our subscription. Recover messages already persisted.
+    // Notifications are drained serially, so queued live events follow this snapshot.
+    for await (const row of readCodexThreadHistory(client, threadId)) {
+      const raw = toObjectRecord(row.item);
+      if (!raw || typeof raw.id !== "string") continue;
+      const item = await threadItemToTimeline(raw, {
+        includeUserMessage: true,
+        cwd: this.config.cwd ?? null,
+      });
+      if (item?.type === "user_message") {
+        const key = `${threadId}:${raw.id}`;
+        if (this.emittedProviderSubagentUserMessageKeys.has(key)) continue;
+        this.emittedProviderSubagentUserMessageKeys.add(key);
+        this.emitProviderSubagentTimeline(threadId, item);
+      } else if (item?.type === "assistant_message" || item?.type === "reasoning") {
+        // Snapshot text may overlap deltas already queued on the connection. Wait for
+        // the authoritative completion to append any remaining suffix exactly once.
+        this.hydratedSubagentTextItems.set(raw.id, item.text);
+        this.emitProviderSubagentTimeline(threadId, item);
+      }
+    }
+  }
+
   private async replayPendingSubAgentNotifications(threadIds: readonly string[]): Promise<void> {
     for (const threadId of threadIds) {
+      await this.attachProviderSubagent(threadId);
       const pending = this.pendingSubAgentNotificationsByThreadId.get(threadId);
       if (!pending) {
         continue;
@@ -5986,6 +6071,9 @@ export class CodexAppServerAgentSession implements AgentSession {
       } satisfies CodexSubAgentCallState);
 
     state.toolCall = timelineItem;
+    const model = typeof rawItem.model === "string" ? rawItem.model : null;
+    const effort = typeof rawItem.reasoningEffort === "string" ? rawItem.reasoningEffort : null;
+    if (model) state.subtitle = effort ? `${model} · ${effort}` : model;
     state.parentCallId ??= parentCallId;
     state.parentSubagentId ??= parentSubagentId;
     const activity = readCodexSubAgentActivity(rawItem);
@@ -6203,6 +6291,7 @@ export class CodexAppServerAgentSession implements AgentSession {
         status: providerStatus,
         toolCallId: state.callId,
         parentSubagentId: state.parentSubagentId,
+        ...(state.subtitle ? { subtitle: state.subtitle } : {}),
       },
     });
   }
@@ -6230,6 +6319,18 @@ export class CodexAppServerAgentSession implements AgentSession {
   ): void {
     const itemId = parsed.item.id;
     if (!parsed.threadId) return;
+    if (
+      itemId &&
+      (timelineItem.type === "assistant_message" || timelineItem.type === "reasoning")
+    ) {
+      const snapshot = this.hydratedSubagentTextItems.get(itemId);
+      if (snapshot !== undefined) {
+        const suffix = this.buildMissingFinalTextSuffix(timelineItem, snapshot);
+        if (suffix) this.emitProviderSubagentTimeline(parsed.threadId, suffix);
+        this.hydratedSubagentTextItems.set(itemId, timelineItem.text);
+        return;
+      }
+    }
     if (timelineItem.type === "assistant_message" && itemId) {
       const streamedText = this.pendingAgentMessages.get(itemId);
       if (streamedText !== undefined) {
@@ -7492,6 +7593,34 @@ export class CodexAppServerAgentClient implements AgentClient {
     private readonly runtimeSettings?: ProviderRuntimeSettings,
     private readonly deps: CodexAppServerAgentDeps = {},
   ) {}
+
+  async refreshPaseoMcpServer(server: McpServerConfig | null): Promise<void> {
+    // Only the explicitly shared server owns a durable daemon integration. Never
+    // rewrite the user's ordinary CLI configuration for isolated sessions.
+    if (!sharedCodexEnabled(buildCodexAppServerEnv(this.runtimeSettings))) return;
+    const child = await this.spawnAppServer();
+    const client =
+      this.deps._createCodexClient?.(child, this.logger, () => ({})) ??
+      new CodexAppServerClient(child, this.logger);
+    try {
+      await client.request("initialize", buildCodexAppServerInitializeParams(), 15_000);
+      client.notify("initialized", {});
+      await client.request(
+        "config/value/write",
+        {
+          keyPath: "mcp_servers.paseo",
+          value: server ? { ...toCodexMcpConfig(server), enabled: true } : { enabled: false },
+          // Keep the transport when disabled: loaded threads may retain a session
+          // URL override, so deleting the global definition would not disable it.
+          mergeStrategy: "upsert",
+        },
+        15_000,
+      );
+      await client.request("config/mcpServer/reload", null, 30_000);
+    } finally {
+      await client.dispose();
+    }
+  }
 
   async remoteControl(action: CodexRemoteControlAction): Promise<CodexRemoteControlResult> {
     if (!sharedCodexEnabled(buildCodexAppServerEnv(this.runtimeSettings))) {

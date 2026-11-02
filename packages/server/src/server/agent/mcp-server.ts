@@ -7,10 +7,16 @@ import type {
 } from "@modelcontextprotocol/sdk/types.js";
 
 import { addModelVisibleStructuredContent } from "./tools/paseo-tool-serialization.js";
-import { createPaseoToolCatalog, type PaseoToolHostDependencies } from "./tools/paseo-tools.js";
+import {
+  createPaseoAgentToolManifest,
+  createPaseoToolCatalog,
+  type PaseoToolHostDependencies,
+} from "./tools/paseo-tools.js";
 import type { PaseoToolResult } from "./tools/types.js";
 
-export type AgentMcpServerOptions = PaseoToolHostDependencies;
+export type AgentMcpServerOptions = PaseoToolHostDependencies & {
+  agentManifest?: boolean;
+};
 
 type McpToolContext = RequestHandlerExtra<ServerRequest, ServerNotification>;
 
@@ -35,7 +41,9 @@ export async function createAgentMcpServer(options: AgentMcpServerOptions): Prom
     version: "2.0.0",
   });
 
-  for (const tool of catalog.tools.values()) {
+  const tools = options.agentManifest ? createPaseoAgentToolManifest(options).tools : catalog.tools;
+
+  for (const tool of tools.values()) {
     server.registerTool(
       tool.name,
       {

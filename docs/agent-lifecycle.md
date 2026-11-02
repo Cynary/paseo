@@ -316,6 +316,12 @@ Provider timelines use the same structural timeline item format but deliberately
 
 Provider descriptors may include one compact subtitle. The provider owns its contents and formatting; clients display and truncate it without interpreting provider-specific model, thinking, or usage fields.
 
+### Codex provider subagents
+
+Codex children need their own `thread/resume` subscription to receive canonical user and assistant messages; the parent's legacy command notifications alone are not a complete child conversation. Paseo attaches without forwarding the parent's configuration, recovers the delegated prompt and existing message text, and displays the child's resolved model and reasoning effort in its subtitle. On parent history restoration, it reattaches only children already loaded by Codex, so inspecting history does not restart completed workers. Text already present in the attachment snapshot is reconciled with its authoritative item completion to avoid duplicating queued deltas; subsequent new messages stream normally.
+
+Multi-agent V2 children remain owned by their parent. Codex reports `canAcceptDirectInput: false` and rejects direct turn input to them; follow-up instructions must go through the parent agent. Their Paseo tab therefore remains read-only.
+
 ### Claude provider subagents: the task protocol
 
 Claude Code announces subagent lifecycle on the SDK stream (`task_started` / `task_updated` / `task_notification` / `task_progress`), and Paseo reads those announcements rather than reconstructing them from sidechain frames. The live source (`subagents/live-source.ts`) and the replay source (`subagents/replay-source.ts`) both translate into one observation vocabulary (`subagents/observation.ts`), so a fact is derived once for both paths instead of once per path. Gotchas that are not obvious from the SDK types:

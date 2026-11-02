@@ -767,6 +767,8 @@ export interface ResolveAgentDefaultModeInput {
 }
 
 export interface AgentClient {
+  /** Refresh daemon-owned tools without interrupting loaded provider threads. */
+  refreshPaseoMcpServer?(server: McpServerConfig | null): Promise<void>;
   remoteControl?(action: CodexRemoteControlAction): Promise<CodexRemoteControlResult>;
   readonly provider: AgentProvider;
   readonly capabilities: AgentCapabilityFlags;

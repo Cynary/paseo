@@ -33,6 +33,65 @@ import {
   toAgentUsage,
 } from "./codex-app-server-agent.js";
 
+describe("shared Codex MCP refresh", () => {
+  test("publishes enable/disable then reloads without touching threads", async () => {
+    const request = vi.fn(async () => ({}));
+    const dispose = vi.fn(async () => {});
+    const provider = new CodexAppServerAgentClient(
+      createTestLogger(),
+      {
+        env: { PASEO_CODEX_SHARED_SERVER: "1" },
+      },
+      { _createCodexClient: () => ({ request, notify: () => {}, dispose }) },
+    );
+    castInternals<{
+      spawnAppServer: () => Promise<ChildProcessWithoutNullStreams>;
+    }>(provider).spawnAppServer = async () => new EventEmitter() as ChildProcessWithoutNullStreams;
+    await provider.refreshPaseoMcpServer({
+      type: "http",
+      url: "http://localhost/mcp/agents?callerProvider=codex",
+    });
+    expect(request.mock.calls).toEqual([
+      ["initialize", expect.anything(), 15_000],
+      [
+        "config/value/write",
+        {
+          keyPath: "mcp_servers.paseo",
+          value: {
+            url: "http://localhost/mcp/agents?callerProvider=codex",
+            enabled: true,
+          },
+          mergeStrategy: "upsert",
+        },
+        15_000,
+      ],
+      ["config/mcpServer/reload", null, 30_000],
+    ]);
+    request.mockClear();
+    await provider.refreshPaseoMcpServer(null);
+    expect(request).toHaveBeenCalledWith(
+      "config/value/write",
+      {
+        keyPath: "mcp_servers.paseo",
+        value: { enabled: false },
+        mergeStrategy: "upsert",
+      },
+      15_000,
+    );
+    expect(dispose).toHaveBeenCalledTimes(2);
+  });
+
+  test("does not change isolated app-server configuration", async () => {
+    const provider = new CodexAppServerAgentClient(createTestLogger(), {
+      env: { PASEO_CODEX_SHARED_SERVER: "0" },
+    });
+    const spawn = vi.fn();
+    castInternals<{ spawnAppServer: typeof spawn }>(provider).spawnAppServer = spawn;
+    await provider.refreshPaseoMcpServer(null);
+    expect(spawn).not.toHaveBeenCalled();
+  });
+});
+
 describe("Codex imported settings", () => {
   test("imports native settings before resuming with daemon defaults", async () => {
     const native = {
@@ -4655,6 +4714,104 @@ describe("Codex app-server provider", () => {
       type: "timeline",
       item: { callId: "spawn-reused-foreign-thread", status: "running" },
     });
+  });
+
+  test("attaches a discovered child without parent overrides and recovers its prompt and output", async () => {
+    const session = createSession();
+    const events: AgentStreamEvent[] = [];
+    session.subscribe((event) => events.push(event));
+    const request = vi.fn(async (method: string, params: unknown) => {
+      if (method === "thread/resume")
+        return {
+          thread: { id: "child-thread" },
+          model: "gpt-6.1-sol",
+          reasoningEffort: "high",
+        };
+      if (method === "thread/read")
+        return {
+          thread: {
+            turns: [
+              {
+                id: "child-turn",
+                items: [
+                  {
+                    id: "prompt",
+                    type: "userMessage",
+                    content: [
+                      {
+                        type: "text",
+                        text: "Investigate the missing sessions",
+                      },
+                    ],
+                  },
+                  {
+                    id: "answer",
+                    type: "agentMessage",
+                    text: "Found the cause",
+                  },
+                ],
+              },
+            ],
+          },
+        };
+      throw new Error(`Unexpected ${method}: ${JSON.stringify(params)}`);
+    });
+    castInternals<{ client: { request: typeof request } }>(session).client = {
+      request,
+    };
+    await asInternals(session).handleNotification("item/completed", {
+      threadId: "test-thread",
+      item: {
+        type: "subAgentActivity",
+        id: "spawn-child",
+        kind: "started",
+        agentThreadId: "child-thread",
+        agentPath: "/root/investigate",
+        model: "gpt-6.1-sol",
+        reasoningEffort: "high",
+      },
+    });
+    expect(request).toHaveBeenCalledWith("thread/resume", {
+      threadId: "child-thread",
+      excludeTurns: true,
+    });
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "provider_subagent",
+        event: expect.objectContaining({
+          type: "upsert",
+          id: "child-thread",
+          subtitle: "gpt-6.1-sol · high",
+        }),
+      }),
+    );
+    await asInternals(session).handleNotification("item/agentMessage/delta", {
+      threadId: "child-thread",
+      itemId: "answer",
+      delta: "Found the cause",
+    });
+    await asInternals(session).handleNotification("item/completed", {
+      threadId: "child-thread",
+      item: {
+        id: "answer",
+        type: "agentMessage",
+        text: "Found the cause: filtering",
+      },
+    });
+    const childItems = events.flatMap((event) =>
+      event.type === "provider_subagent" && event.event.type === "timeline"
+        ? [event.event.item]
+        : [],
+    );
+    expect(childItems.filter((item) => item.type === "user_message")).toMatchObject([
+      { text: "Investigate the missing sessions" },
+    ]);
+    expect(
+      childItems
+        .filter((item) => item.type === "assistant_message")
+        .map((item) => item.text)
+        .join(""),
+    ).toBe("Found the cause: filtering");
   });
 
   test("routes msg-scoped legacy Codex events to their child thread", async () => {
