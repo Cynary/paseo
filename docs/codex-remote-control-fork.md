@@ -157,6 +157,25 @@ layout are not transferred. Failures are reported per item and produce a nonzero
 exit status; rerunning skips successful imports. Missing working directories must
 be restored or mapped before import.
 
+### One sidebar entry per imported conversation
+
+Paseo's normal import groups conversations sharing a directory into tabs in one
+workspace. To give each imported conversation its own named sidebar workspace,
+stop the selected Paseo daemon (the shared Codex server may remain running) and run:
+
+```sh
+npx tsx scripts/codex-workspace-layout.mts \
+  --home "$HOME/.paseo-fork" --source-codex-home "$HOME/.codex" --apply
+```
+
+The source home selects which conversation IDs to reorganize; it is read-only.
+The tool preserves each agent's identity, working directory, project membership,
+and history handle. It retains one existing workspace per group and creates
+additional workspaces for its other conversations. Existing single-conversation
+workspaces are named from their conversation titles. A backup is saved under
+`$PASEO_HOME/layout-backups/`. Omit `--apply` to preview. Restart Paseo afterward;
+expand **Show more** under a project to display all its workspace rows.
+
 ### Headless devbox using its existing Codex home
 
 Stop the old app-server. Configure the fork's Codex provider with
