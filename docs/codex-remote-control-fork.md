@@ -131,7 +131,8 @@ python3 scripts/codex-history-import.py \
 ```
 
 This adds missing thread IDs and their paginated history, projects, sections,
-and rollout files. Existing thread IDs are skipped wholesale; this is not a
+and rollout files, including historical fork/rewind generations that are absent
+from the current thread catalog. Existing thread IDs are skipped wholesale; this is not a
 merge of two independently edited versions of a conversation. Archived threads
 remain archived in Codex. Destination databases are backed up under
 `paseo-import-backups/<timestamp>/`, and a failed database merge rolls back its
@@ -193,9 +194,11 @@ python3 scripts/codex-history-import.py \
   --map-path /home/olduser/Projects=/home/newuser/Projects --apply
 ```
 
-`--map-path` is repeatable; the longest matching path prefix wins. It updates
-working directories, project roots, structured session metadata, and sandbox
-paths while adjusting history byte offsets for changed rollout metadata. Old
+`--map-path` is repeatable; the longest matching path prefix wins. For histories without fork/rewind lineage, it updates working directories,
+project roots, structured session metadata, and sandbox paths while adjusting
+history byte offsets for changed rollout metadata. Forked paginated histories
+currently require the original working-directory paths on the destination; the
+importer refuses path remapping for them instead of invalidating lineage offsets. Old
 paths in historical message text remain historical text. Then start Paseo and
 run `codex-bulk-import.mts` as above. This is a copy/import, not ongoing sync;
 keep the old copy inactive once work continues on the new machine.

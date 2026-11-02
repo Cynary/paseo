@@ -103,6 +103,18 @@ class HistoryImportTest(unittest.TestCase):
         module.import_history(bundle, self.target, True)
         self.assertEqual((self.target / 'archived_sessions/session.jsonl').read_bytes(), self.original)
 
+    def test_unindexed_history_generations_are_preserved(self):
+        old = self.source / 'sessions' / 'old-generation.jsonl'
+        old.parent.mkdir()
+        old.write_text(json.dumps({'type': 'session_meta', 'payload': {'id': 'thread'}}) + '\n')
+        with database(self.source / module.HISTORY) as db:
+            db.execute('INSERT INTO thread_items VALUES (?,?,?)', ('old-generation', 0, 'base history'))
+        result = module.import_history(self.source, self.target, True)
+        self.assertEqual(result['historicalRollouts'], 1)
+        self.assertEqual((self.target / 'sessions/old-generation.jsonl').read_bytes(), old.read_bytes())
+        with database(self.target / module.HISTORY) as db:
+            self.assertEqual(db.execute("SELECT data FROM thread_items WHERE thread_id='old-generation'").fetchone()[0], 'base history')
+
     def test_schema_mismatch_fails_before_mutation(self):
         with database(self.target / module.STATE) as db:
             db.execute('ALTER TABLE threads ADD COLUMN new_field TEXT')

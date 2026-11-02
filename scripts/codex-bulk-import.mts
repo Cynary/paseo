@@ -50,6 +50,12 @@ const existing = new Set(
     .filter((r) => r.provider === "codex")
     .flatMap((r) => (r.persistence ? [r.persistence.sessionId, r.persistence.nativeHandle] : [])),
 );
+async function unresolvedImportFailure(id: string, error: unknown) {
+  const refreshed = new AgentStorage(path.join(home, "agents"), pino({ level: "silent" }));
+  const records = await refreshed.listByProviderSession("codex", id);
+  return records.length ? [] : [{ id, error: String(error) }];
+}
+
 const candidates = inventory.threads.filter(
   (t) =>
     !t.archived &&
@@ -95,7 +101,9 @@ if (!values.apply) {
         imported += 1;
         console.log(JSON.stringify({ imported, id: thread.id }));
       } catch (error) {
-        failures.push({ id: thread.id, error: String(error) });
+        // Startup discovery can import the same thread after our inventory read.
+        // Verify the durable record rather than reporting that race as failure.
+        failures.push(...(await unresolvedImportFailure(thread.id, error)));
       }
     }
     console.log(JSON.stringify({ imported, failures }, null, 2));

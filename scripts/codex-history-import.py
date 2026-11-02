@@ -82,6 +82,8 @@ def import_history(source, target, apply=False, mappings=()):
         existing = {r[0] for r in dst.execute('SELECT id FROM threads')}
         rows = [dict(r) for r in src.execute('SELECT * FROM threads') if r['id'] not in existing]
         ids = {r['id'] for r in rows}
+        indexed_ids = {r[0] for r in src.execute('SELECT id FROM threads')}
+        lineage_ids = {r[0] for r in history_src.execute('SELECT DISTINCT thread_id FROM thread_items')} - indexed_ids
         sections = {r['thread_section_id'] for r in rows if r['thread_section_id']}
         projects = {r['project_id'] for r in rows if r['project_id']}
         for project_id in projects:
@@ -108,6 +110,8 @@ def import_history(source, target, apply=False, mappings=()):
             meta = json.loads(first)
             replacement = first
             if mappings:
+                if meta.get('payload', {}).get('history_base'):
+                    raise ValueError('Path remapping of forked paginated history is not supported yet; retain the original working-directory paths.')
                 if meta.get('type') != 'session_meta':
                     raise ValueError(f'Cannot remap rollout without initial session_meta: {relative}')
                 meta['payload'] = remap(meta['payload'], mappings)
@@ -117,11 +121,26 @@ def import_history(source, target, apply=False, mappings=()):
             row['cwd'] = remap(row['cwd'], mappings)
             if mappings:
                 row['sandbox_policy'] = json.dumps(remap(json.loads(row['sandbox_policy']), mappings))
+        # Fork/rewind generations are not necessarily rows in `threads`, but
+        # history_base references them by their filename generation UUID.
+        indexed_paths = {Path(r[0]).name for r in src.execute('SELECT rollout_path FROM threads')}
+        for directory in ('sessions', 'archived_sessions'):
+            for original in (source / directory).rglob('*.jsonl'):
+                if original.name in indexed_paths:
+                    continue
+                destination = target / original.relative_to(source)
+                if destination.exists():
+                    continue
+                with original.open('rb') as file:
+                    first = file.readline()
+                if mappings:
+                    raise ValueError('Path remapping with historical rollout generations is not supported yet; retain the original working-directory paths.')
+                files.append((original, destination, first, first, None))
         report = {'source': str(source), 'target': str(target), 'threads': len(rows),
                   'archived': sum(bool(r['archived']) for r in rows),
                   'duplicatesSkipped': len(existing & {r[0] for r in src.execute('SELECT id FROM threads')}),
-                  'bytes': sum(p.stat().st_size for p, *_ in files), 'applied': False}
-        if not apply or not rows:
+                  'bytes': sum(p.stat().st_size for p, *_ in files), 'applied': False, 'historicalRollouts': sum(tid is None for *_, tid in files)}
+        if not apply or (not rows and not files):
             return report
         backup = target / 'paseo-import-backups' / f'{time.time_ns()}'
         backup.mkdir(parents=True, mode=0o700)
@@ -194,13 +213,13 @@ def import_history(source, target, apply=False, mappings=()):
             for table in HISTORY_TABLES:
                 for raw in history_src.execute(f'SELECT * FROM "{table}"'):
                     row = dict(raw)
-                    if row['thread_id'] not in ids:
+                    if row['thread_id'] not in (ids | lineage_ids):
                         continue
-                    delta = deltas[row['thread_id']]
+                    delta = deltas.get(row['thread_id'], 0)
                     for key in ('rollout_byte_offset', 'rollout_end_byte_offset', 'next_rollout_byte_offset'):
                         if row.get(key) is not None and row[key] > 0:
                             row[key] += delta
-                    insert(table, row, 'history')
+                    insert(table, row, 'history', ignore=row['thread_id'] in lineage_ids)
             if write.execute('PRAGMA foreign_key_check').fetchone():
                 raise ValueError('Foreign-key verification failed; rolling back.')
             write.commit()
