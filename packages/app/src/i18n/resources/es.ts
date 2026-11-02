@@ -2,6 +2,11 @@ import { en, type TranslationResources } from "./en";
 import { pluginSettings } from "./plugin-settings";
 
 export const es: TranslationResources = {
+  codexSubagent: {
+    inputUnavailable: "Codex administra este subagente a través de su agente principal.",
+    hostUpdateRequired:
+      "Actualiza este host para abrir los subagentes de Codex como conversaciones.",
+  },
   paneFind: {
     connectionFailure:
       "No se pudo buscar en este chat. Comprueba la conexión con el host y vuelve a intentarlo.",

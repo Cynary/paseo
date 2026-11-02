@@ -3,6 +3,7 @@ import { Text, View } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
 import invariant from "tiny-invariant";
 import { useShallow } from "zustand/react/shallow";
+import { ProviderSubagentConversation } from "./provider-subagent-conversation";
 import { AgentStreamView } from "@/agent-stream/view";
 import { useProviderIcon } from "@/components/provider-icons";
 import {
@@ -116,6 +117,11 @@ function useProviderSubagentDescriptor(
 }
 
 function ProviderSubagentPanel() {
+  const fallback = useMemo(() => <ProjectedProviderSubagentPanel />, []);
+  return <ProviderSubagentConversation fallback={fallback} />;
+}
+
+function ProjectedProviderSubagentPanel() {
   const { t } = useTranslation();
   const { serverId, workspaceId, tabId, target, openFileInWorkspace, openTab } = usePaneContext();
   invariant(target.kind === "provider_subagent", "ProviderSubagentPanel requires provider target");

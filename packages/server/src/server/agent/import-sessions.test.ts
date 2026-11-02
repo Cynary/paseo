@@ -911,3 +911,132 @@ test("importProviderSession requires cwd from the selected provider row", async 
     "Import requires cwd from the selected provider session",
   );
 });
+
+test("materialized native child reopens idempotently after loading its persisted parent", async () => {
+  const harness = await ProviderImportHarness.create({ sessionId: "native-child" });
+  const parent = makeManagedAgent({ id: "parent", cwd: "/tmp/parent", sessionId: "native-parent" });
+  parent.workspaceId = "ws-parent";
+  let loadedParent = false;
+  let hydratedParent = false;
+  await harness.seed(
+    makeStoredProviderSession({
+      id: "parent",
+      cwd: parent.cwd,
+      sessionId: "native-parent",
+      archivedAt: null,
+      workspaceId: "ws-parent",
+    }),
+  );
+  await harness.seed(
+    makeStoredProviderSession({
+      id: harness.snapshot.id,
+      cwd: harness.snapshot.cwd,
+      sessionId: "native-child",
+      archivedAt: null,
+      workspaceId: "ws-parent",
+      labels: { [PARENT_AGENT_ID_LABEL]: "parent" },
+    }),
+  );
+  harness.manager.getAgent = (id) => {
+    if (id === "parent") return loadedParent ? parent : null;
+    return harness.snapshot;
+  };
+  harness.manager.resumeAgentFromPersistence = async () => {
+    loadedParent = true;
+    return parent;
+  };
+  harness.manager.hydrateTimelineFromProvider = async () => {
+    hydratedParent = true;
+  };
+  harness.manager.getProviderSubagent = () => {
+    expect(hydratedParent).toBe(true);
+    return { id: "native-child", provider: "codex", parentAgentId: "parent" } as NonNullable<
+      ReturnType<AgentManager["getProviderSubagent"]>
+    >;
+  };
+  const request = {
+    requestId: "open-child",
+    provider: "codex",
+    providerHandleId: "native-child",
+    parentAgentId: "parent",
+  };
+  const input = {
+    request,
+    workspaceProvisioning: createImportWorkspace("ws-parent"),
+    agentManager: harness.manager,
+    agentStorage: harness.storage,
+    logger: createTestLogger(),
+  };
+  const first = await importProviderSession(input);
+  const second = await importProviderSession(input);
+  expect(first.snapshot.id).toBe(harness.snapshot.id);
+  expect(second.snapshot.id).toBe(first.snapshot.id);
+  expect(harness.freshImports).toEqual([]);
+  expect(first.createdWorkspace).toBeNull();
+});
+
+test("nested native children materialize their immediate parent and reject parent cycles", async () => {
+  const harness = await ProviderImportHarness.create();
+  const root = makeManagedAgent({ id: "root", cwd: "/tmp/root", sessionId: "native-root" });
+  root.workspaceId = "ws-root";
+  const descriptors = new Map([
+    ["native-parent", { id: "native-parent", provider: "codex", parentAgentId: "root" }],
+    [
+      "native-leaf",
+      {
+        id: "native-leaf",
+        provider: "codex",
+        parentAgentId: "root",
+        parentSubagentId: "native-parent",
+      },
+    ],
+  ]);
+  harness.manager.getAgent = (id) => (id === "root" ? root : null);
+  harness.manager.getProviderSubagent = (_parent, id) =>
+    descriptors.get(id) as NonNullable<ReturnType<AgentManager["getProviderSubagent"]>>;
+  harness.manager.importProviderSession = async (request) => {
+    harness.freshImports.push(request);
+    const agent = makeManagedAgent({
+      id: `managed-${request.providerHandleId}`,
+      cwd: request.cwd,
+      sessionId: request.providerHandleId,
+    });
+    agent.workspaceId = "ws-root";
+    return agent;
+  };
+  const input = {
+    request: {
+      requestId: "nested",
+      provider: "codex",
+      providerHandleId: "native-leaf",
+      parentAgentId: "root",
+    },
+    workspaceProvisioning: createImportWorkspace("ws-root"),
+    agentManager: harness.manager,
+    agentStorage: harness.storage,
+    logger: createTestLogger(),
+  };
+  const result = await importProviderSession(input);
+  expect(result.snapshot.id).toBe("managed-native-leaf");
+  expect(harness.freshImports).toMatchObject([
+    {
+      providerHandleId: "native-parent",
+      workspaceId: "ws-root",
+      preserveNativeThread: true,
+      labels: { [PARENT_AGENT_ID_LABEL]: "root" },
+    },
+    {
+      providerHandleId: "native-leaf",
+      workspaceId: "ws-root",
+      preserveNativeThread: true,
+      labels: { [PARENT_AGENT_ID_LABEL]: "managed-native-parent" },
+    },
+  ]);
+  descriptors.set("native-parent", {
+    id: "native-parent",
+    provider: "codex",
+    parentAgentId: "root",
+    parentSubagentId: "native-leaf",
+  });
+  await expect(importProviderSession(input)).rejects.toThrow("Cyclic provider subagent");
+});

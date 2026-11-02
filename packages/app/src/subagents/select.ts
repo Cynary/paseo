@@ -168,8 +168,34 @@ export function selectProviderSubagentsForParent(
   return rows;
 }
 
+export function selectMaterializedCodexThreadIds(
+  state: SessionStoreSnapshot,
+  params: SelectSubagentsParams,
+): string[] {
+  const result: string[] = [];
+  const session = state.sessions[params.serverId];
+  if (!session) return result;
+  for (const agent of session.agents.values()) {
+    const parent = getParentAddressFromLabels(agent.labels, params.serverId);
+    if (
+      agent.provider === "codex" &&
+      agent.persistence?.sessionId &&
+      parent?.serverId === params.serverId &&
+      parent.agentId === params.parentAgentId
+    ) {
+      result.push(agent.persistence.sessionId);
+    }
+  }
+  return result;
+}
+
 export function useSubagentsForParent(params: SelectSubagentsParams): SubagentRow[] {
   const { serverId, parentAgentId } = params;
+  const materializedCodexThreadIds = useStoreWithEqualityFn(
+    useSessionStore,
+    (state) => selectMaterializedCodexThreadIds(state, params),
+    equal,
+  );
   const pendingArchiveIds = usePendingArchiveAgentKeys();
   const selectPaseoRows = useMemo(
     () => createSubagentsForParentSelector({ serverId, parentAgentId }, pendingArchiveIds),
@@ -200,8 +226,13 @@ export function useSubagentsForParent(params: SelectSubagentsParams): SubagentRo
   return useMemo(() => {
     if (params.providerParentSubagentId) return providerRows;
     if (providerRows.length === 0) return paseoRows;
-    const rows = [...paseoRows, ...providerRows];
+    const rows = [
+      ...paseoRows,
+      ...providerRows.filter(
+        (row) => row.provider !== "codex" || !materializedCodexThreadIds.includes(row.id),
+      ),
+    ];
     rows.sort((left, right) => left.createdAt.getTime() - right.createdAt.getTime());
     return rows;
-  }, [params.providerParentSubagentId, paseoRows, providerRows]);
+  }, [params.providerParentSubagentId, paseoRows, providerRows, materializedCodexThreadIds]);
 }

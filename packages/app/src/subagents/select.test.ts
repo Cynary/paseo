@@ -4,6 +4,7 @@ import {
   createSubagentsForParentSelector,
   selectProviderSubagentsForParent,
   selectSubagentsForParent,
+  selectMaterializedCodexThreadIds,
 } from "./select";
 import { createWorkspaceAgentVisibilitySelector } from "@/workspace-tabs/agent-visibility";
 import { useProviderSubagentStore } from "./provider-store";
@@ -76,6 +77,36 @@ afterEach(() => {
     descriptors: new Map(),
     timelines: new Map(),
     hiddenFromTrack: new Set(),
+  });
+});
+
+describe("materialized Codex child identity", () => {
+  it("matches native thread IDs only under the same parent, including archived children", () => {
+    setAgents([
+      makeAgent({
+        id: "managed-child",
+        parentAgentId: "parent",
+        archivedAt: AGENT_TIMESTAMP,
+        persistence: { provider: "codex", sessionId: "native-child" },
+      }),
+      makeAgent({
+        id: "other-child",
+        parentAgentId: "other-parent",
+        persistence: { provider: "codex", sessionId: "other-native-child" },
+      }),
+      makeAgent({
+        id: "claude-child",
+        provider: "claude",
+        parentAgentId: "parent",
+        persistence: { provider: "claude", sessionId: "claude-native-child" },
+      }),
+    ]);
+    expect(
+      selectMaterializedCodexThreadIds(useSessionStore.getState(), {
+        serverId: SERVER_ID,
+        parentAgentId: "parent",
+      }),
+    ).toEqual(["native-child"]);
   });
 });
 

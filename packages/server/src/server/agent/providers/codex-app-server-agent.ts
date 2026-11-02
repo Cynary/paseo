@@ -579,6 +579,7 @@ interface CodexThreadHistory {
 }
 
 interface PersistedSubAgentRoute {
+  presentation?: Record<string, unknown>;
   childThreadId: string;
   toolCall: ToolCallTimelineItem;
 }
@@ -2138,8 +2139,13 @@ async function loadCodexThreadHistoryTimeline(params: {
 }): Promise<CodexThreadHistoryProjection> {
   const timeline: PersistedTimelineEntry[] = [];
   const subAgentTimelineIndexByThreadId = new Map<string, number>();
+  const subAgentPresentation = new Map<string, Record<string, unknown>>();
   try {
-    await projectCodexThreadHistory(params, { timeline, subAgentTimelineIndexByThreadId });
+    await projectCodexThreadHistory(params, {
+      timeline,
+      subAgentTimelineIndexByThreadId,
+      subAgentPresentation,
+    });
   } catch (error) {
     if (!(error instanceof CodexThreadHistoryTooLargeError)) throw error;
     // The session stays usable; the row says why the history stops here.
@@ -2149,7 +2155,7 @@ async function loadCodexThreadHistoryTimeline(params: {
     ([childThreadId, timelineIndex]): PersistedSubAgentRoute[] => {
       const item = timeline[timelineIndex]?.item;
       return item?.type === "tool_call" && item.detail.type === "sub_agent"
-        ? [{ childThreadId, toolCall: item }]
+        ? [{ childThreadId, toolCall: item, presentation: subAgentPresentation.get(childThreadId) }]
         : [];
     },
   );
@@ -2161,12 +2167,20 @@ async function projectCodexThreadHistory(
   projection: {
     timeline: PersistedTimelineEntry[];
     subAgentTimelineIndexByThreadId: Map<string, number>;
+    subAgentPresentation: Map<string, Record<string, unknown>>;
   },
 ): Promise<void> {
   const { timeline, subAgentTimelineIndexByThreadId } = projection;
   for await (const row of readCodexThreadHistory(params.client, params.threadId)) {
     const { item } = row;
     const historicalSubAgentActivity = readCodexSubAgentActivity(item);
+    const raw = toObjectRecord(item);
+    if (historicalSubAgentActivity && typeof raw?.model === "string") {
+      projection.subAgentPresentation.set(historicalSubAgentActivity.agentThreadId, {
+        model: raw.model,
+        reasoningEffort: raw.reasoningEffort,
+      });
+    }
     if (historicalSubAgentActivity) {
       const existingIndex = subAgentTimelineIndexByThreadId.get(
         historicalSubAgentActivity.agentThreadId,
@@ -3483,7 +3497,14 @@ interface ConsumedRootCompaction {
 
 export class CodexAppServerAgentSession implements AgentSession {
   readonly provider = CODEX_PROVIDER;
-  readonly capabilities = CODEX_APP_SERVER_CAPABILITIES;
+  private canAcceptDirectInput = true;
+  get capabilities() {
+    return {
+      ...CODEX_APP_SERVER_CAPABILITIES,
+      supportsDirectInput: this.canAcceptDirectInput,
+      supportsSettingsChanges: this.canAcceptDirectInput,
+    };
+  }
 
   private readonly logger: Logger;
   private readonly config: AgentSessionConfig;
@@ -3638,6 +3659,7 @@ export class CodexAppServerAgentSession implements AgentSession {
     this.providerOptions =
       validateProviderOptions("codex", CodexProviderOptionsSchema, config.providerOptions) ?? {};
     this.config = config;
+    this.canAcceptDirectInput = resumeHandle?.metadata?.codexCanAcceptDirectInput !== false;
     this.harnessEnvironment = deps.environment ?? buildCodexAppServerEnv();
     this.asyncQuestions = new CodexAsyncQuestions(resumeHandle?.metadata?.asyncQuestions);
     this.codexHome = deps.codexHome ?? resolveCodexHomeDir(process.env);
@@ -3731,8 +3753,10 @@ export class CodexAppServerAgentSession implements AgentSession {
 
       if (this.currentThreadId) {
         await this.ensureThreadLoaded();
-        await this.syncProject();
-        await this.applyDefaultModelAndThinking();
+        if (!this.resumeHandle?.metadata?.codexPreserveNativeThread) {
+          await this.syncProject();
+          await this.applyDefaultModelAndThinking();
+        }
       }
 
       if (this.closed) {
@@ -3770,6 +3794,8 @@ export class CodexAppServerAgentSession implements AgentSession {
   }
 
   private rememberResolvedSandboxPolicy(response: unknown): void {
+    const directInput = toObjectRecord(toObjectRecord(response)?.thread)?.canAcceptDirectInput;
+    if (typeof directInput === "boolean") this.canAcceptDirectInput = directInput;
     const sandbox = toObjectRecord(toObjectRecord(response)?.sandbox);
     this.resolvedSandboxPolicy = sandbox ?? null;
     if (sandbox?.type !== "workspaceWrite") return;
@@ -4133,7 +4159,7 @@ export class CodexAppServerAgentSession implements AgentSession {
       visitedThreadIds.add(next.route.childThreadId);
       this.registerSubAgentToolCall({
         timelineItem: next.route.toolCall,
-        rawItem: { agentThreadId: next.route.childThreadId },
+        rawItem: { ...next.route.presentation, agentThreadId: next.route.childThreadId },
         parentCallId: next.parentCallId,
         parentSubagentId: next.parentSubagentId,
       });
@@ -4165,10 +4191,10 @@ export class CodexAppServerAgentSession implements AgentSession {
     }
   }
 
-  private async ensureThreadLoaded(): Promise<void> {
-    if (!this.client || !this.currentThreadId) return;
+  private buildThreadResumeParams(threadId: string): Record<string, unknown> {
     // Paseo reads history only when it replays it; the resume response needs no turns.
-    const params: Record<string, unknown> = { threadId: this.currentThreadId, excludeTurns: true };
+    const params: Record<string, unknown> = { threadId: threadId, excludeTurns: true };
+    if (this.resumeHandle?.metadata?.codexPreserveNativeThread) return params;
     if (this.deps.customCodexConfig) {
       // Resume otherwise prefers the provider stored on the thread, including
       // the unnamespaced key emitted by earlier Paseo versions.
@@ -4185,6 +4211,12 @@ export class CodexAppServerAgentSession implements AgentSession {
     if (codexConfig) {
       params.config = codexConfig;
     }
+    return params;
+  }
+
+  private async ensureThreadLoaded(): Promise<void> {
+    if (!this.client || !this.currentThreadId) return;
+    const params = this.buildThreadResumeParams(this.currentThreadId);
     try {
       const loaded = toObjectRecord(await this.client.request("thread/loaded/list", {}));
       const ids = Array.isArray(loaded?.data) ? loaded.data : [];
@@ -4469,6 +4501,7 @@ export class CodexAppServerAgentSession implements AgentSession {
     prompt: AgentPromptInput,
     options?: AgentRunOptions,
   ): Promise<{ turnId: string }> {
+    this.assertDirectInputAllowed();
     if (this.activeForegroundTurnId || this.pendingForegroundStart) {
       throw new Error("A foreground turn is already active");
     }
@@ -4555,6 +4588,7 @@ export class CodexAppServerAgentSession implements AgentSession {
     prompt: AgentPromptInput,
     options: SteerActiveTurnOptions,
   ): Promise<SteerResult> {
+    this.assertDirectInputAllowed();
     const client = this.client;
     const threadId = this.currentThreadId;
     let nativeTurnId = this.currentTurnId;
@@ -4733,7 +4767,16 @@ export class CodexAppServerAgentSession implements AgentSession {
     return this.currentMode ?? null;
   }
 
+  private assertDirectInputAllowed(): void {
+    if (!this.canAcceptDirectInput) {
+      throw new Error(
+        "Codex manages this subagent through its parent; direct input and settings changes are unavailable.",
+      );
+    }
+  }
+
   async setMode(modeId: string): Promise<void | AgentProviderNotice> {
+    this.assertDirectInputAllowed();
     validateCodexMode(modeId);
     this.currentMode = modeId;
     this.hasWorkflowModeOverride = true;
@@ -4745,6 +4788,7 @@ export class CodexAppServerAgentSession implements AgentSession {
   }
 
   async setModel(modelId: string | null): Promise<void> {
+    this.assertDirectInputAllowed();
     this.config.model = modelId ?? undefined;
     this.reconcileServiceTier();
     this.refreshResolvedCollaborationMode();
@@ -4752,6 +4796,7 @@ export class CodexAppServerAgentSession implements AgentSession {
   }
 
   async setThinkingOption(thinkingOptionId: string | null): Promise<void | AgentProviderNotice> {
+    this.assertDirectInputAllowed();
     this.config.thinkingOptionId = normalizeCodexThinkingOptionId(thinkingOptionId);
     this.refreshResolvedCollaborationMode();
     this.cachedRuntimeInfo = null;
@@ -4761,6 +4806,7 @@ export class CodexAppServerAgentSession implements AgentSession {
   }
 
   async setFeature(featureId: string, value: unknown): Promise<void> {
+    this.assertDirectInputAllowed();
     // COMPAT(codexFastPreference): added in v0.10.0, remove after 2027-03-29 once clients use service_tier.
     if (featureId === "fast_mode") {
       const fast = this.currentServiceTiers().find((tier) => tier.name.toLowerCase() === "fast");
@@ -5060,6 +5106,8 @@ export class CodexAppServerAgentSession implements AgentSession {
         systemPrompt: this.config.systemPrompt,
         mcpServers: this.config.mcpServers,
         asyncQuestions: this.asyncQuestions.serialize(),
+        codexCanAcceptDirectInput: this.canAcceptDirectInput,
+        codexPreserveNativeThread: this.resumeHandle?.metadata?.codexPreserveNativeThread === true,
       },
     };
   }
@@ -7898,6 +7946,8 @@ export class CodexAppServerAgentClient implements AgentClient {
       this.deps._createCodexClient?.(child, this.logger, () => ({})) ??
       new CodexAppServerClient(child, this.logger);
     let nativeConfig: Partial<AgentSessionConfig>;
+    let canAcceptDirectInput = true;
+    let nativeCwd = input.cwd;
     try {
       await client.request("initialize", buildCodexAppServerInitializeParams());
       client.notify("initialized", {});
@@ -7908,14 +7958,41 @@ export class CodexAppServerAgentClient implements AgentClient {
         excludeTurns: true,
       });
       nativeConfig = codexImportedSessionConfig(response, context.config.providerOptions);
+      canAcceptDirectInput =
+        toObjectRecord(toObjectRecord(response)?.thread)?.canAcceptDirectInput !== false;
+      if (input.preserveNativeThread) {
+        const threadCwd = toObjectRecord(toObjectRecord(response)?.thread)?.cwd;
+        if (typeof threadCwd === "string") nativeCwd = threadCwd;
+      }
+      if (input.preserveNativeThread && !nativeConfig.title) {
+        const source = toObjectRecord(toObjectRecord(toObjectRecord(response)?.thread)?.source);
+        const spawn = toObjectRecord(toObjectRecord(source?.subAgent)?.thread_spawn);
+        const agentPath = typeof spawn?.agent_path === "string" ? spawn.agent_path : null;
+        if (agentPath) nativeConfig.title = path.posix.basename(agentPath);
+      }
     } finally {
       await client.dispose();
     }
     return importSessionFromPersistence({
       provider: CODEX_PROVIDER,
-      request: input,
+      request: { ...input, cwd: nativeCwd },
       context,
       config: nativeConfig,
+      ...(input.preserveNativeThread
+        ? {
+            persistence: {
+              provider: CODEX_PROVIDER,
+              sessionId: input.providerHandleId,
+              nativeHandle: input.providerHandleId,
+              metadata: {
+                ...nativeConfig,
+                cwd: nativeCwd,
+                codexPreserveNativeThread: true,
+                codexCanAcceptDirectInput: canAcceptDirectInput,
+              },
+            },
+          }
+        : {}),
       resumeSession: this.resumeSession.bind(this),
     });
   }

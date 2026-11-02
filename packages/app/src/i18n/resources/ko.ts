@@ -2,6 +2,10 @@ import { en, type TranslationResources } from "./en";
 import { pluginSettings } from "./plugin-settings";
 
 export const ko: TranslationResources = {
+  codexSubagent: {
+    inputUnavailable: "Codex는 상위 에이전트를 통해 이 하위 에이전트를 관리합니다.",
+    hostUpdateRequired: "Codex 하위 에이전트를 대화로 열려면 이 호스트를 업데이트하세요.",
+  },
   paneFind: {
     connectionFailure: "이 채팅을 검색할 수 없습니다. 호스트 연결을 확인하고 다시 시도하세요.",
     historyChangedFailure: "검색 중에 채팅이 변경되었습니다. 다시 검색하세요.",

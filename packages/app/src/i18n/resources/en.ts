@@ -1,4 +1,8 @@
 export const en = {
+  codexSubagent: {
+    inputUnavailable: "Codex manages this subagent through its parent.",
+    hostUpdateRequired: "Update this host to open Codex subagents as conversations.",
+  },
   paneFind: {
     connectionFailure: "Could not search this chat. Check the host connection and retry.",
     historyChangedFailure: "The chat changed while searching. Search again.",

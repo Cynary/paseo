@@ -2,6 +2,10 @@ import { en, type TranslationResources } from "./en";
 import { pluginSettings } from "./plugin-settings";
 
 export const ar: TranslationResources = {
+  codexSubagent: {
+    inputUnavailable: "يدير Codex هذا الوكيل الفرعي من خلال الوكيل الأصل.",
+    hostUpdateRequired: "حدّث هذا المضيف لفتح وكلاء Codex الفرعيين كمحادثات.",
+  },
   paneFind: {
     connectionFailure: "تعذر البحث في هذه المحادثة. تحقق من الاتصال بالمضيف وأعد المحاولة.",
     historyChangedFailure: "تغيّرت المحادثة أثناء البحث. أعد البحث.",

@@ -213,6 +213,7 @@ const perfNow: () => number =
 const PROJECT_GITHUB_CLONE_TIMEOUT_MS = 5 * 60 * 1000;
 
 interface ImportAgentInputBase {
+  parentAgentId?: string;
   cwd?: string;
   workspaceId?: string;
   labels?: Record<string, string>;
@@ -3580,6 +3581,7 @@ export class DaemonClient {
     const message = SessionInboundMessageSchema.parse({
       type: "import_agent_request",
       requestId,
+      ...(input.parentAgentId ? { parentAgentId: input.parentAgentId } : {}),
       ...("providerId" in input
         ? { providerId: input.providerId, providerHandleId: input.providerHandleId }
         : { provider: input.provider, sessionId: input.sessionId }),

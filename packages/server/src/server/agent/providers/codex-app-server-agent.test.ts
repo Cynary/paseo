@@ -92,6 +92,108 @@ describe("shared Codex MCP refresh", () => {
   });
 });
 
+describe("native Codex child materialization", () => {
+  test.each([false, true])(
+    "keeps native identity/settings and direct-input capability %s",
+    async (canAcceptDirectInput) => {
+      const native = {
+        model: "native-model",
+        reasoningEffort: "high",
+        approvalPolicy: "never",
+        sandbox: { type: "dangerFullAccess" },
+        thread: {
+          id: "native-child",
+          name: null,
+          cwd: "/tmp/native-child",
+          canAcceptDirectInput,
+          source: { subAgent: { thread_spawn: { agent_path: "/root/hello" } } },
+        },
+      };
+      const request = vi.fn(async (method: string) => (method === "thread/resume" ? native : {}));
+      const provider = new CodexAppServerAgentClient(createTestLogger(), undefined, {
+        _createCodexClient: () => ({ request, notify: () => {}, dispose: async () => {} }),
+      });
+      castInternals<{ spawnAppServer: () => Promise<ChildProcessWithoutNullStreams> }>(
+        provider,
+      ).spawnAppServer = async () => new EventEmitter() as ChildProcessWithoutNullStreams;
+      const session = createSession();
+      vi.spyOn(session, "streamHistory").mockImplementation(async function* () {});
+      const resume = vi.spyOn(provider, "resumeSession").mockResolvedValue(session);
+      const defaults = createConfig({ model: "parent-model", thinkingOptionId: "low" });
+      const imported = await provider.importSession(
+        { providerHandleId: "native-child", cwd: defaults.cwd, preserveNativeThread: true },
+        { config: defaults, storedConfig: defaults },
+      );
+      expect(imported.config).toMatchObject({
+        model: "native-model",
+        thinkingOptionId: "high",
+        modeId: "full-access",
+        title: "hello",
+        cwd: "/tmp/native-child",
+      });
+      expect(resume.mock.calls[0][0]).toMatchObject({
+        sessionId: "native-child",
+        nativeHandle: "native-child",
+        metadata: {
+          codexPreserveNativeThread: true,
+          codexCanAcceptDirectInput: canAcceptDirectInput,
+        },
+      });
+      expect(request.mock.calls.map(([method]) => method)).toEqual(["initialize", "thread/resume"]);
+      expect(imported.persistence.sessionId).toBe("native-child");
+    },
+  );
+
+  test("parent-owned children resume without overrides and reject edits before changing config", async () => {
+    const config = createConfig({
+      model: "native-model",
+      thinkingOptionId: "high",
+      systemPrompt: "parent instructions",
+    });
+    const session = new CodexAppServerAgentSession(
+      config,
+      {
+        sessionId: "native-child",
+        metadata: { codexPreserveNativeThread: true, codexCanAcceptDirectInput: false },
+      },
+      createTestLogger(),
+      () => {
+        throw new Error("must not spawn");
+      },
+    );
+    const request = vi.fn(async (method: string) =>
+      method === "thread/loaded/list"
+        ? { data: [] }
+        : { thread: { canAcceptDirectInput: false }, sandbox: { type: "dangerFullAccess" } },
+    );
+    const internals = castInternals<{ client: unknown; ensureThreadLoaded: () => Promise<void> }>(
+      session,
+    );
+    internals.client = { request };
+    await internals.ensureThreadLoaded();
+    expect(request).toHaveBeenCalledWith("thread/resume", {
+      threadId: "native-child",
+      excludeTurns: true,
+    });
+    expect(session.capabilities).toMatchObject({
+      supportsDirectInput: false,
+      supportsSettingsChanges: false,
+    });
+    await expect(session.setModel("other")).rejects.toThrow("through its parent");
+    await expect(session.setThinkingOption("low")).rejects.toThrow("through its parent");
+    await expect(session.setMode("read-only")).rejects.toThrow("through its parent");
+    expect(config).toMatchObject({
+      model: "native-model",
+      thinkingOptionId: "high",
+      modeId: "auto",
+    });
+    expect(createSession().capabilities).toMatchObject({
+      supportsDirectInput: true,
+      supportsSettingsChanges: true,
+    });
+  });
+});
+
 describe("Codex imported settings", () => {
   test("imports native settings before resuming with daemon defaults", async () => {
     const native = {

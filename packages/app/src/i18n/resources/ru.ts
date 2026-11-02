@@ -2,6 +2,10 @@ import { en, type TranslationResources } from "./en";
 import { pluginSettings } from "./plugin-settings";
 
 export const ru: TranslationResources = {
+  codexSubagent: {
+    inputUnavailable: "Codex управляет этим субагентом через родительского агента.",
+    hostUpdateRequired: "Обновите этот хост, чтобы открывать субагентов Codex как диалоги.",
+  },
   paneFind: {
     connectionFailure:
       "Не удалось выполнить поиск в чате. Проверьте подключение к хосту и повторите попытку.",

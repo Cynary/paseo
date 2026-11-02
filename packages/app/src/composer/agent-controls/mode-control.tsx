@@ -248,18 +248,25 @@ export function useLiveAgentModeControl(
 ): AgentModeControlValue | null {
   const slice = useSessionStore(
     useShallow((state) => {
-      const agent = state.sessions[serverId]?.agents?.get(agentId);
+      const agent =
+        state.sessions[serverId]?.agents?.get(agentId) ??
+        state.sessions[serverId]?.agentDetails?.get(agentId);
       if (!agent) return null;
       return {
         provider: agent.provider,
         cwd: agent.cwd,
         currentModeId: agent.currentModeId,
+        supportsSettingsChanges: agent.capabilities?.supportsSettingsChanges !== false,
       };
     }),
   );
   const availableModes = useStoreWithEqualityFn(
     useSessionStore,
-    (state) => state.sessions[serverId]?.agents?.get(agentId)?.availableModes ?? EMPTY_MODES,
+    (state) =>
+      (
+        state.sessions[serverId]?.agents?.get(agentId) ??
+        state.sessions[serverId]?.agentDetails?.get(agentId)
+      )?.availableModes ?? EMPTY_MODES,
     compareAvailableModes,
   );
   const client = useSessionStore((state) => state.sessions[serverId]?.client ?? null);
@@ -275,7 +282,7 @@ export function useLiveAgentModeControl(
 
   const handleSelectMode = useCallback(
     (modeId: string) => {
-      if (!client || !slice?.provider) return;
+      if (!client || !slice?.provider || !slice.supportsSettingsChanges) return;
       void updatePreferences((current) =>
         mergeProviderPreferences({
           preferences: current,
@@ -293,7 +300,7 @@ export function useLiveAgentModeControl(
           toast.error(toErrorMessage(error));
         });
     },
-    [agentId, client, slice?.provider, toast, updatePreferences],
+    [agentId, client, slice?.provider, slice?.supportsSettingsChanges, toast, updatePreferences],
   );
 
   return useMemo(() => {
@@ -304,7 +311,7 @@ export function useLiveAgentModeControl(
       modeOptions: availableModes,
       selectedModeId: slice.currentModeId,
       onSelectMode: handleSelectMode,
-      disabled: !client,
+      disabled: !client || !slice.supportsSettingsChanges,
     };
   }, [availableModes, client, handleSelectMode, providerDefinitions, slice]);
 }

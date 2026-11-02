@@ -575,6 +575,7 @@ export interface ImportableProviderSession {
 }
 
 export interface ImportProviderSessionInput {
+  preserveNativeThread?: boolean;
   providerHandleId: string;
   cwd: string;
 }

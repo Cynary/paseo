@@ -389,6 +389,7 @@ function pickDesktopModel({
 }
 
 type AgentControlsSlice = {
+  supportsSettingsChanges: boolean;
   provider: string;
   cwd: string | null;
   runtimeModelId: string | null;
@@ -404,11 +405,15 @@ function selectAgentControlsSlice(
   serverId: string,
   agentId: string,
 ): AgentControlsSlice {
-  const currentAgent = state.sessions[serverId]?.agents?.get(agentId) ?? null;
+  const currentAgent =
+    state.sessions[serverId]?.agents?.get(agentId) ??
+    state.sessions[serverId]?.agentDetails?.get(agentId) ??
+    null;
   if (!currentAgent) {
     return null;
   }
   return {
+    supportsSettingsChanges: currentAgent.capabilities?.supportsSettingsChanges !== false,
     provider: currentAgent.provider,
     cwd: currentAgent.cwd,
     runtimeModelId: currentAgent.runtimeInfo?.model ?? null,
@@ -1549,6 +1554,10 @@ function ThinkingComboboxOption({
   );
 }
 
+function canChangeAgentSettings(client: unknown, agent: AgentControlsSlice): boolean {
+  return Boolean(client) && agent?.supportsSettingsChanges !== false;
+}
+
 export const AgentControls = memo(function AgentControls({
   agentId,
   serverId,
@@ -1769,7 +1778,7 @@ export const AgentControls = memo(function AgentControls({
   const commandCenterRegistration = (
     <AgentControlCommandCenterRegistration
       sourceId={`agent:${serverId}:${agentId}`}
-      enabled={Boolean(client)}
+      enabled={canChangeAgentSettings(client, agent)}
       controls={commandCenterControls}
     />
   );
@@ -1814,7 +1823,7 @@ export const AgentControls = memo(function AgentControls({
         onRetryModelProvider={handleRetryModelProvider}
         isRetryingModelProvider={snapshotIsRefreshing}
         onDropdownClose={onDropdownClose}
-        disabled={!client}
+        disabled={!canChangeAgentSettings(client, agent)}
         modeControl={modeControl}
         modelSelectorServerId={serverId}
         isCompactLayout={isCompactLayout}

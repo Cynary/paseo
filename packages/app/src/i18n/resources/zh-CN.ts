@@ -2,6 +2,10 @@ import { en, type TranslationResources } from "./en";
 import { pluginSettings } from "./plugin-settings";
 
 export const zhCN: TranslationResources = {
+  codexSubagent: {
+    inputUnavailable: "Codex 通过父代理管理此子代理。",
+    hostUpdateRequired: "请更新此主机，以将 Codex 子代理作为对话打开。",
+  },
   paneFind: {
     connectionFailure: "无法搜索此聊天。请检查主机连接后重试。",
     historyChangedFailure: "搜索期间聊天已更改。请重新搜索。",

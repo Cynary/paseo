@@ -1575,6 +1575,8 @@ export class AgentManager {
   }
 
   importProviderSession(input: {
+    preserveNativeThread?: boolean;
+    title?: string;
     provider: AgentProvider;
     providerHandleId: string;
     cwd: string;
@@ -1585,6 +1587,8 @@ export class AgentManager {
   }
 
   private async importProviderSessionInternal(input: {
+    preserveNativeThread?: boolean;
+    title?: string;
     provider: AgentProvider;
     providerHandleId: string;
     cwd: string;
@@ -1604,6 +1608,7 @@ export class AgentManager {
       {
         provider: input.provider,
         cwd: input.cwd,
+        ...(input.title ? { title: input.title } : {}),
       },
       resolvedAgentId,
     );
@@ -1624,6 +1629,7 @@ export class AgentManager {
     const providerLaunchConfig = this.resolveProviderLaunchConfig(launchConfig, launchContext);
     const imported = await client.importSession(
       {
+        preserveNativeThread: input.preserveNativeThread,
         providerHandleId: input.providerHandleId,
         cwd: input.cwd,
       },

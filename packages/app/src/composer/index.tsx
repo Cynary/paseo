@@ -276,15 +276,28 @@ function buildRealtimeVoiceButtonStyle(
   );
 }
 
+function resolveComposerAgent(
+  state: ReturnType<typeof useSessionStore.getState>,
+  serverId: string,
+  agentId: string,
+) {
+  return (
+    state.sessions[serverId]?.agents?.get(agentId) ??
+    state.sessions[serverId]?.agentDetails?.get(agentId) ??
+    null
+  );
+}
+
 function buildAgentStateSelector(serverId: string, agentId: string) {
   return (state: ReturnType<typeof useSessionStore.getState>) => {
-    const agent = state.sessions[serverId]?.agents?.get(agentId) ?? null;
+    const agent = resolveComposerAgent(state, serverId, agentId);
     return {
       status: agent?.status ?? null,
       contextWindowMaxTokens: agent?.lastUsage?.contextWindowMaxTokens ?? null,
       contextWindowUsedTokens: agent?.lastUsage?.contextWindowUsedTokens ?? null,
       totalCostUsd: agent?.lastUsage?.totalCostUsd ?? null,
       model: agent?.model ?? null,
+      supportsDirectInput: agent?.capabilities?.supportsDirectInput !== false,
     };
   };
 }
@@ -1313,7 +1326,14 @@ function ComposerContentImpl({
   const isDesktopWebBreakpoint = resolveIsDesktopWebBreakpoint(isCompactFormFactor);
   const hasFinePointer = useHasFinePointer();
   const isDesktopLayout = resolveIsDesktopWebBreakpoint(isCompactLayout);
-  const messagePlaceholder = resolveMessagePlaceholder(inputMode, isDesktopLayout, t, placeholder);
+  const supportsDirectInput = inputMode !== "chat" || agentState.supportsDirectInput;
+  const directInputUnavailable = t("codexSubagent.inputUnavailable");
+  const messagePlaceholder = resolveMessagePlaceholder(
+    inputMode,
+    isDesktopLayout,
+    t,
+    supportsDirectInput ? placeholder : directInputUnavailable,
+  );
   const hasText = useSyncExternalStore(
     textSource.subscribe,
     () => textSource.getSnapshot().trim().length > 0,
@@ -1538,6 +1558,7 @@ function ComposerContentImpl({
 
   const submitMessage = useCallback(
     async (text: string, submitAttachments: ComposerAttachment[]) => {
+      if (!supportsDirectInput) throw new Error(directInputUnavailable);
       onMessageSent?.();
       if (onSubmitMessageRef.current) {
         await onSubmitMessageRef.current({ text, attachments: submitAttachments, cwd });
@@ -1553,7 +1574,7 @@ function ComposerContentImpl({
         appSettings.sendBehavior === "steer" ? "steer" : "interrupt",
       );
     },
-    [appSettings.sendBehavior, cwd, onMessageSent, t],
+    [appSettings.sendBehavior, cwd, onMessageSent, supportsDirectInput, directInputUnavailable, t],
   );
 
   useEffect(() => {
@@ -2387,7 +2408,9 @@ function ComposerContentImpl({
   const isSubmitLoadingVisible =
     isProcessing || isSubmitLoading || isUploadingFile || pendingNativeImagePastes > 0;
   const isSubmitDisabled =
-    isSubmitLoadingVisible || (waitForForgeAutoAttachOnSubmit && isForgeResolving);
+    !supportsDirectInput ||
+    isSubmitLoadingVisible ||
+    (waitForForgeAutoAttachOnSubmit && isForgeResolving);
 
   // Disable drops while submitting/uploading: the submit path clears and restores attachments,
   // so a drop in that window would be lost or land on a locked draft. `disabled` hides the
@@ -2486,7 +2509,7 @@ function ComposerContentImpl({
                   placeholder={messagePlaceholder}
                   autoFocus={messageInputAutoFocus}
                   autoFocusKey={`${serverId}:${agentId}:${autoFocusKey ?? ""}`}
-                  disabled={isSubmitLoading}
+                  disabled={isSubmitLoading || !supportsDirectInput}
                   leftContent={leftContent}
                   beforeVoiceContent={beforeVoiceContent}
                   rightContent={rightContent}

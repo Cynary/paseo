@@ -1903,6 +1903,7 @@ export const ImportAgentRequestMessageSchema = z.object({
   workspaceId: z.string().optional(),
   labels: z.record(z.string(), z.string()).optional(),
   requestId: z.string(),
+  parentAgentId: z.string().optional(),
 });
 
 export const RefreshAgentRequestMessageSchema = z.object({
@@ -3810,6 +3811,7 @@ export const ServerInfoStatusPayloadSchema = z
         agentForkContextCursor: z.boolean().optional(),
         // COMPAT(providerSubagents): added in v0.1.107, remove gate after 2027-01-12.
         providerSubagents: z.boolean().optional(),
+        codexSubagentImport: z.boolean().optional(),
         // COMPAT(projectedSubagentTimeline): added after v0.8.0, remove gates after 2027-03-14; retain wire field.
         projectedSubagentTimeline: z.boolean().optional(),
         wholeTurnTimeline: z.boolean().optional(),

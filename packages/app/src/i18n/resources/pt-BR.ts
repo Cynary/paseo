@@ -2,6 +2,10 @@ import { en, type TranslationResources } from "./en";
 import { pluginSettings } from "./plugin-settings";
 
 export const ptBR: TranslationResources = {
+  codexSubagent: {
+    inputUnavailable: "O Codex gerencia este subagente por meio do agente pai.",
+    hostUpdateRequired: "Atualize este host para abrir subagentes do Codex como conversas.",
+  },
   paneFind: {
     connectionFailure:
       "Não foi possível pesquisar nesta conversa. Verifique a conexão com o host e tente novamente.",

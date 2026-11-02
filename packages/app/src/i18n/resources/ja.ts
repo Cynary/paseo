@@ -2,6 +2,10 @@ import { en, type TranslationResources } from "./en";
 import { pluginSettings } from "./plugin-settings";
 
 export const ja: TranslationResources = {
+  codexSubagent: {
+    inputUnavailable: "Codex は親エージェントを通じてこのサブエージェントを管理します。",
+    hostUpdateRequired: "このホストを更新すると、Codex サブエージェントを会話として開けます。",
+  },
   paneFind: {
     connectionFailure:
       "このチャットを検索できませんでした。ホストへの接続を確認して再試行してください。",

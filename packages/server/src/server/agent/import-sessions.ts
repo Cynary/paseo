@@ -26,7 +26,8 @@ type ImportAgentRequestMessage = z.infer<typeof ImportAgentRequestMessageSchema>
 const METADATA_GENERATION_PROMPT_PREFIX =
   "Generate metadata for a coding agent based on the user prompt.";
 const IMPORT_SESSION_SEARCH_SCAN_LIMIT = 500;
-export type ImportSessionAgentManager = AgentLoaderManager &
+export type ImportSessionAgentManager = Partial<Pick<AgentManager, "getProviderSubagent">> &
+  AgentLoaderManager &
   Pick<
     AgentManager,
     | "archiveSnapshot"
@@ -43,6 +44,8 @@ const providerSessionImportMutations = new WeakMap<
 >();
 
 export interface NormalizedImportAgentRequest {
+  nativeChildTitle?: string;
+  parentAgentId?: string;
   provider: AgentProvider;
   providerHandleId: string;
   cwd?: string;
@@ -107,6 +110,7 @@ export function normalizeImportAgentRequest(
     return { error: "Import requires providerId and providerHandleId" };
   }
   return {
+    parentAgentId: msg.parentAgentId,
     provider: provider as AgentProvider,
     providerHandleId,
     cwd: msg.cwd,
@@ -184,7 +188,47 @@ function normalizeImportSessionQuery(query: string | undefined): string | null {
 
 export async function importProviderSession(
   input: ImportProviderSessionInput,
+  ancestors: ReadonlySet<string> = new Set(),
 ): Promise<ImportProviderSessionResult> {
+  if (input.request.parentAgentId) {
+    let parentId = input.request.parentAgentId;
+    let parent = await ensureAgentLoaded(parentId, input);
+    const identity = `${parentId}:${input.request.providerHandleId}`;
+    if (ancestors.has(identity)) throw new Error("Cyclic provider subagent parent relationship");
+    const nextAncestors = new Set([...ancestors, identity]);
+    const child = input.agentManager.getProviderSubagent?.(
+      parentId,
+      input.request.providerHandleId,
+    );
+    if (!child || !parent?.workspaceId || child.provider !== input.request.provider) {
+      throw new Error("Provider child does not belong to the requested parent");
+    }
+    if (child.parentSubagentId) {
+      const immediateParent = await importProviderSession(
+        {
+          ...input,
+          request: {
+            ...input.request,
+            providerHandleId: child.parentSubagentId,
+          },
+        },
+        nextAncestors,
+      );
+      parent = immediateParent.snapshot;
+      parentId = parent.id;
+    }
+    input = {
+      ...input,
+      request: {
+        ...input.request,
+        parentAgentId: parentId,
+        nativeChildTitle: child.title ?? undefined,
+        cwd: parent.config.cwd,
+        workspaceId: parent.workspaceId ?? undefined,
+        labels: { ...input.request.labels, [PARENT_AGENT_ID_LABEL]: parentId },
+      },
+    };
+  }
   const cwd = input.request.cwd;
   if (!cwd) {
     throw new Error("Import requires cwd from the selected provider session");
@@ -211,6 +255,13 @@ async function importProviderSessionNow(
     providerHandleId,
   );
   const activeRecord = matchingRecords.find((record) => !record.archivedAt);
+  if (activeRecord && input.request.parentAgentId) {
+    if (getParentAgentIdFromLabels(activeRecord.labels) !== input.request.parentAgentId) {
+      throw new Error("Imported provider child belongs to a different parent");
+    }
+    const snapshot = await ensureAgentLoaded(activeRecord.id, input);
+    return { snapshot, timelineSize: input.agentManager.getTimeline(snapshot.id).length };
+  }
   if (activeRecord) {
     throw new Error(`Provider session is already imported: ${providerHandleId}`);
   }
@@ -253,6 +304,9 @@ async function importProviderSessionNow(
     cwd,
     workspaceId,
     labels,
+    ...(input.request.parentAgentId
+      ? { preserveNativeThread: true, title: input.request.nativeChildTitle }
+      : {}),
   });
   await unarchiveAgentState(input.agentStorage, input.agentManager, snapshot.id);
 
