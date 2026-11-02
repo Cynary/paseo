@@ -81,6 +81,46 @@ afterEach(() => {
 });
 
 describe("materialized Codex child identity", () => {
+  it("uses an already hydrated detail when the cached directory row lacks native identity", () => {
+    const cached = makeAgent({ id: "child", parentAgentId: "parent" });
+    setAgents([cached]);
+    useSessionStore.getState().setAgentDetails(
+      SERVER_ID,
+      new Map([
+        [
+          cached.id,
+          {
+            ...cached,
+            persistence: { provider: "codex", sessionId: "native-child" },
+          },
+        ],
+      ]),
+    );
+    expect(
+      selectMaterializedCodexThreadIds(useSessionStore.getState(), {
+        serverId: SERVER_ID,
+        parentAgentId: "parent",
+      }),
+    ).toEqual(["native-child"]);
+  });
+
+  it("uses runtime native identity when a directory row omits persistence", () => {
+    setAgents([
+      makeAgent({
+        id: "child",
+        parentAgentId: "parent",
+        persistence: null,
+        runtimeInfo: { provider: "codex", sessionId: "native-child" },
+      }),
+    ]);
+    expect(
+      selectMaterializedCodexThreadIds(useSessionStore.getState(), {
+        serverId: SERVER_ID,
+        parentAgentId: "parent",
+      }),
+    ).toEqual(["native-child"]);
+  });
+
   it("matches native thread IDs only under the same parent, including archived children", () => {
     setAgents([
       makeAgent({

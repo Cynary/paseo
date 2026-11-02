@@ -172,21 +172,22 @@ export function selectMaterializedCodexThreadIds(
   state: SessionStoreSnapshot,
   params: SelectSubagentsParams,
 ): string[] {
-  const result: string[] = [];
+  const result = new Set<string>();
   const session = state.sessions[params.serverId];
-  if (!session) return result;
-  for (const agent of session.agents.values()) {
+  if (!session) return [];
+  for (const agent of [...session.agents.values(), ...session.agentDetails.values()]) {
     const parent = getParentAddressFromLabels(agent.labels, params.serverId);
+    const nativeThreadId = agent.persistence?.sessionId ?? agent.runtimeInfo?.sessionId;
     if (
       agent.provider === "codex" &&
-      agent.persistence?.sessionId &&
+      nativeThreadId &&
       parent?.serverId === params.serverId &&
       parent.agentId === params.parentAgentId
     ) {
-      result.push(agent.persistence.sessionId);
+      result.add(nativeThreadId);
     }
   }
-  return result;
+  return [...result].sort();
 }
 
 export function useSubagentsForParent(params: SelectSubagentsParams): SubagentRow[] {

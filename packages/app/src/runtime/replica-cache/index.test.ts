@@ -433,6 +433,26 @@ describe("ReplicaCache", () => {
     expect(storage.rows.size).toBe(0);
   });
 
+  it("retains native child identity and input restrictions before timeline hydration", async () => {
+    const storage = new MemoryStorage();
+    const writer = createCache(storage);
+    const child = agent("child");
+    child.labels = { "paseo.parent-agent-id": "parent" };
+    child.runtimeInfo = { provider: "codex", sessionId: "native-child" };
+    child.capabilities.supportsDirectInput = false;
+    child.capabilities.supportsSettingsChanges = false;
+    writer.commitDirectoryMutations(SERVER_ID, [
+      { kind: "agent", type: "upsert", id: child.id, value: child },
+    ]);
+    await writer.flush();
+    const restored = await createCache(storage).readDirectory(SERVER_ID);
+    expect(restored.agents.get("child")).toMatchObject({
+      persistence: { provider: "codex", sessionId: "native-child" },
+      capabilities: { supportsDirectInput: false, supportsSettingsChanges: false },
+      parentAgentId: "parent",
+    });
+  });
+
   it("round-trips explicit directory and timeline commits", async () => {
     const storage = new MemoryStorage();
     const writer = createCache(storage);

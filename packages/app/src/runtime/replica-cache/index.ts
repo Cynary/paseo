@@ -172,6 +172,8 @@ const StoredTimelineItemSchema = z.discriminatedUnion("kind", [
 ]);
 
 const AgentCapabilitiesSchema = z.strictObject({
+  supportsDirectInput: z.boolean().optional(),
+  supportsSettingsChanges: z.boolean().optional(),
   supportsStreaming: z.boolean(),
   supportsSessionPersistence: z.boolean(),
   supportsSessionListing: z.boolean().optional(),
@@ -243,7 +245,7 @@ const StoredAgentSnapshotSchema = z.strictObject({
   currentModeId: z.string().nullable(),
   availableModes: z.array(z.never()).max(0),
   pendingPermissions: z.array(z.never()).max(0),
-  persistence: z.null(),
+  persistence: z.strictObject({ provider: AgentProviderSchema, sessionId: z.string() }).nullable(),
   lastError: z.string().optional(),
   title: z.string().nullable(),
   labels: z.record(z.string(), z.string()),
@@ -612,6 +614,40 @@ function serializeAgentTurn(agent: Agent): NonNullable<StoredAgent["turn"]> {
   };
 }
 
+function serializeAgentCapabilities(agent: Agent): Agent["capabilities"] {
+  return {
+    supportsStreaming: agent.capabilities.supportsStreaming,
+    ...(agent.capabilities.supportsDirectInput !== undefined
+      ? { supportsDirectInput: agent.capabilities.supportsDirectInput }
+      : {}),
+    ...(agent.capabilities.supportsSettingsChanges !== undefined
+      ? { supportsSettingsChanges: agent.capabilities.supportsSettingsChanges }
+      : {}),
+    supportsSessionPersistence: agent.capabilities.supportsSessionPersistence,
+    ...(agent.capabilities.supportsSessionListing !== undefined
+      ? { supportsSessionListing: agent.capabilities.supportsSessionListing }
+      : {}),
+    supportsDynamicModes: agent.capabilities.supportsDynamicModes,
+    supportsMcpServers: agent.capabilities.supportsMcpServers,
+    supportsReasoningStream: agent.capabilities.supportsReasoningStream,
+    supportsToolInvocations: agent.capabilities.supportsToolInvocations,
+    ...(agent.capabilities.supportsRewindConversation !== undefined
+      ? { supportsRewindConversation: agent.capabilities.supportsRewindConversation }
+      : {}),
+    ...(agent.capabilities.supportsRewindFiles !== undefined
+      ? { supportsRewindFiles: agent.capabilities.supportsRewindFiles }
+      : {}),
+    ...(agent.capabilities.supportsRewindBoth !== undefined
+      ? { supportsRewindBoth: agent.capabilities.supportsRewindBoth }
+      : {}),
+  };
+}
+
+function serializeNativeIdentity(agent: Agent): Agent["persistence"] {
+  const sessionId = agent.persistence?.sessionId ?? agent.runtimeInfo?.sessionId;
+  return sessionId ? { provider: agent.provider, sessionId } : null;
+}
+
 function serializeAgent(agent: Agent): StoredAgent {
   const snapshot = {
     id: agent.id,
@@ -632,30 +668,13 @@ function serializeAgent(agent: Agent): StoredAgent {
           },
         }
       : {}),
-    capabilities: {
-      supportsStreaming: agent.capabilities.supportsStreaming,
-      supportsSessionPersistence: agent.capabilities.supportsSessionPersistence,
-      ...(agent.capabilities.supportsSessionListing !== undefined
-        ? { supportsSessionListing: agent.capabilities.supportsSessionListing }
-        : {}),
-      supportsDynamicModes: agent.capabilities.supportsDynamicModes,
-      supportsMcpServers: agent.capabilities.supportsMcpServers,
-      supportsReasoningStream: agent.capabilities.supportsReasoningStream,
-      supportsToolInvocations: agent.capabilities.supportsToolInvocations,
-      ...(agent.capabilities.supportsRewindConversation !== undefined
-        ? { supportsRewindConversation: agent.capabilities.supportsRewindConversation }
-        : {}),
-      ...(agent.capabilities.supportsRewindFiles !== undefined
-        ? { supportsRewindFiles: agent.capabilities.supportsRewindFiles }
-        : {}),
-      ...(agent.capabilities.supportsRewindBoth !== undefined
-        ? { supportsRewindBoth: agent.capabilities.supportsRewindBoth }
-        : {}),
-    },
+    capabilities: serializeAgentCapabilities(agent),
     currentModeId: agent.currentModeId,
     availableModes: [],
     pendingPermissions: [],
-    persistence: null,
+    // Keep the compact native identity so a cached managed child still replaces its
+    // provider projection before its full timeline/runtime metadata is hydrated.
+    persistence: serializeNativeIdentity(agent),
     ...(agent.lastError ? { lastError: agent.lastError } : {}),
     title: agent.title,
     labels: agent.labels,
