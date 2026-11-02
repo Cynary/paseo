@@ -5982,6 +5982,37 @@ describe("Codex app-server provider", () => {
     ]);
   });
 
+  test("shared connections keep new threads attached before a rollout exists", async () => {
+    const session = new CodexAppServerAgentSession(
+      createConfig({ thinkingOptionId: "medium" }),
+      null,
+      createTestLogger(),
+      () => {
+        throw new Error("Unexpected spawn");
+      },
+      { environment: { PASEO_CODEX_SHARED_SERVER: "1" } },
+    );
+    const state = castInternals<{
+      client: CodexClientLike;
+      currentThreadId: string | null;
+      ensureThread(): Promise<void>;
+      ensureThreadLoaded(): Promise<void>;
+    }>(session);
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") return { thread: { id: "new-thread" } };
+      if (method === "thread/loaded/list") return { data: ["new-thread", "other-thread"] };
+      if (method === "thread/resume") throw new Error("no rollout found");
+      return {};
+    });
+    state.client = { request };
+    await state.ensureThread();
+    await expect(state.ensureThreadLoaded()).resolves.toBeUndefined();
+    expect(request.mock.calls.map(([method]) => method)).not.toContain("thread/resume");
+    // A thread loaded by another connection still needs resume to subscribe.
+    state.currentThreadId = "other-thread";
+    await expect(state.ensureThreadLoaded()).rejects.toThrow("no rollout found");
+  });
+
   test("does not replace a persisted Codex thread when app-server resume fails", async () => {
     const session = createSession({ thinkingOptionId: "medium" });
     session.currentThreadId = "archived-thread-id";

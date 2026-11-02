@@ -3457,6 +3457,8 @@ export class CodexAppServerAgentSession implements AgentSession {
   // Codex writes a new thread's rollout at its first turn. Until then the thread exists only
   // in this app-server, so no other app-server can resume it and it is not reported.
   private savedThreadId: string | null = null;
+  // Shared servers list threads loaded by other connections too. Track our subscription.
+  private attachedThreadId: string | null = null;
   private currentTurnId: string | null = null;
   private pendingForegroundTurnIdentification: {
     foregroundTurnId: string;
@@ -4124,10 +4126,15 @@ export class CodexAppServerAgentSession implements AgentSession {
     try {
       const loaded = toObjectRecord(await this.client.request("thread/loaded/list", {}));
       const ids = Array.isArray(loaded?.data) ? loaded.data : [];
-      if (ids.includes(this.currentThreadId) && !sharedCodexEnabled(this.deps.environment ?? {})) {
+      if (
+        ids.includes(this.currentThreadId) &&
+        (!sharedCodexEnabled(this.deps.environment ?? {}) ||
+          this.attachedThreadId === this.currentThreadId)
+      ) {
         return;
       }
       const response = await this.client.request("thread/resume", params);
+      this.attachedThreadId = this.currentThreadId;
       this.rememberResolvedSandboxPolicy(response);
     } catch (error) {
       const threadId = this.currentThreadId;
@@ -4141,6 +4148,7 @@ export class CodexAppServerAgentSession implements AgentSession {
           }
         }
         const response = await this.client.request("thread/resume", params);
+        this.attachedThreadId = this.currentThreadId;
         this.rememberResolvedSandboxPolicy(response);
         this.logger.info({ threadId }, "Unarchived Codex thread to restore active Paseo agent");
         return;
@@ -5299,6 +5307,7 @@ export class CodexAppServerAgentSession implements AgentSession {
       await client.dispose();
     }
     this.client = null;
+    this.attachedThreadId = null;
   }
 
   async listCommands(): Promise<AgentSlashCommand[]> {
@@ -5552,6 +5561,7 @@ export class CodexAppServerAgentSession implements AgentSession {
       this.cachedRuntimeInfo = null;
     }
     this.currentThreadId = threadId;
+    this.attachedThreadId = threadId;
   }
 
   private async syncProject(): Promise<string | undefined> {
