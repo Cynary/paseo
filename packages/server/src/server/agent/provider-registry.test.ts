@@ -56,6 +56,7 @@ const mockState = vi.hoisted(() => {
     isCommandAvailable: vi.fn(async (_command: string) => false),
     runtimeModels: new Map<string, AgentModelDefinition[]>(),
     cursorListFeaturesConfigs: [] as AgentSessionConfig[],
+    codexMcpRefreshCalls: [] as unknown[],
     codexNativeArchiveCalls: [] as Array<{ state: "archive" | "restore"; handle: unknown }>,
     reset() {
       this.constructorArgs.claude = [];
@@ -71,6 +72,7 @@ const mockState = vi.hoisted(() => {
       this.runtimeModels.clear();
       this.cursorListFeaturesConfigs = [];
       this.codexNativeArchiveCalls = [];
+      this.codexMcpRefreshCalls = [];
     },
   };
 });
@@ -167,6 +169,11 @@ vi.mock("./providers/codex-app-server-agent.js", () => ({
         models: mockState.runtimeModels.get(this.provider) ?? [],
         modes: [],
       };
+    }
+
+    async refreshPaseoMcpServer(server: unknown): Promise<void> {
+      // Access this to ensure the registry preserves method binding.
+      mockState.codexMcpRefreshCalls.push({ provider: this.provider, server });
     }
 
     async archiveNativeSession(handle: unknown): Promise<void> {
@@ -625,6 +632,24 @@ test("new provider extending claude appears in registry", () => {
   expect(registry.zai.description).toBe("Claude with ZAI defaults");
   expect(registry.zai.createClient(logger).provider).toBe("zai");
 });
+
+test.each(["codex", "my-codex"])(
+  "%s forwards live MCP refresh through the registry",
+  async (provider) => {
+    const registry = buildProviderRegistry(logger, {
+      providerOverrides: { "my-codex": { extends: "codex", label: "My Codex" } },
+    });
+    const client = registry[provider].createClient(logger);
+    const server = { type: "http" as const, url: "http://127.0.0.1/mcp/agents" };
+    expect(client.refreshPaseoMcpServer).toBeTypeOf("function");
+    await client.refreshPaseoMcpServer!(server);
+    await client.refreshPaseoMcpServer!(null);
+    expect(mockState.codexMcpRefreshCalls).toEqual([
+      { provider: "codex", server },
+      { provider: "codex", server: null },
+    ]);
+  },
+);
 
 test("new provider extending codex archives and unarchives its native sessions", async () => {
   const registry = buildProviderRegistry(logger, {

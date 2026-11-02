@@ -502,6 +502,7 @@ function wrapClientProvider(
       return inner.capabilities;
     },
     shutdown: inner.shutdown?.bind(inner),
+    refreshPaseoMcpServer: inner.refreshPaseoMcpServer?.bind(inner),
     createSession: async (config, launchContext, options) =>
       wrapSessionProvider(
         provider,
