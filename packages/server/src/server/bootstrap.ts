@@ -1,3 +1,4 @@
+import { createSharedCodexImports } from "./agent/codex-shared-imports.js";
 import { createRestartRecovery } from "./agent/restart-recovery/index.js";
 import { sendPromptToAgent } from "./agent/agent-prompt.js";
 import { createIdleRuntimeCleanup } from "./agent/idle-runtime-cleanup/index.js";
@@ -1734,6 +1735,14 @@ export async function createPaseoDaemon(
 
   logger.info({ elapsed: elapsed() }, "Bootstrap complete, ready to start listening");
 
+  const sharedCodexImports = createSharedCodexImports({
+    snapshots: providerSnapshotManager,
+    agentManager,
+    agentStorage,
+    workspaceProvisioning,
+    onWorkspace: async (workspaceId) => emitWorkspaceUpdatesExternal([workspaceId]),
+    logger,
+  });
   const start = async () => {
     let mainStarted = false;
     try {
@@ -1948,6 +1957,7 @@ export async function createPaseoDaemon(
       // model loading doesn't block the server from accepting connections.
       speechService.start();
       scriptHealthMonitor.start();
+      sharedCodexImports.start();
     } catch (error) {
       localCredential = null;
       await deleteLocalCredential(config.paseoHome);
@@ -1973,6 +1983,7 @@ export async function createPaseoDaemon(
     // down, so plugin shutdown cannot withdraw a provider from under an agent
     // that is still open. Plugins themselves are stopped once every session
     // they serve has been closed, further down.
+    await sharedCodexImports.close();
     unsubscribePluginProviders();
     unsubscribePluginSessionChanges();
     await hubRelationships.stop();

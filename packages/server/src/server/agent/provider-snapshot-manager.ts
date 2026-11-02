@@ -586,6 +586,15 @@ export class ProviderSnapshotManager {
     return client.remoteControl(action);
   }
 
+  sharedCodexHomes(): Array<{ provider: AgentProvider; home: string }> {
+    return Object.entries(this.generation.definitions).flatMap(([provider, definition]) => {
+      const env = { ...process.env, ...definition.configuration?.runtimeSettings?.env };
+      if (!definition.enabled || env.PASEO_CODEX_SHARED_SERVER !== "1") return [];
+      if (provider !== "codex" && definition.derivedFromProviderId !== "codex") return [];
+      return [{ provider, home: resolve(expandTilde(env.CODEX_HOME || `${homedir()}/.codex`)) }];
+    });
+  }
+
   async getProviderDiagnostic(provider: AgentProvider): Promise<ProviderDiagnosticResult> {
     const definition = this.generation.definitions[provider];
     if (!definition) {

@@ -35,12 +35,24 @@ socket. Each provider session has a separate WebSocket-to-stdio adapter.
 Closing an adapter does not stop the server. Idle cleanup retains shared
 subscriptions so turns started from the phone reach Paseo.
 
+The daemon also watches durable Codex history/index writes and imports newly
+discovered threads through Paseo’s existing import workflow. This includes
+phone-created conversations and an initial reconciliation on startup. Discovery
+is driven by filesystem events, with duplicate and archived imports suppressed.
+
 Paseo project IDs map idempotently to Codex projects. Project names and root
 paths are synchronized when starting or reopening a session. A worktree's
 conversation remains under its parent project, with its own working directory.
 Conversation titles are synchronized on reopen. Pane splits, tab order, project
 icons, and other Paseo presentation preferences are not Codex project metadata
 and do not transfer to the phone.
+
+Phone discovery is still under investigation with Android app 1.2026.293:
+server-side projects and threads exist, but the phone's ordinary list can omit
+them. Legacy workspace metadata did not resolve this. Pinning a verification
+thread is being tested as a workaround for the behavior reported in
+[openai/codex#41470](https://github.com/openai/codex/issues/41470).
+Do not treat server-side project assignment as proof of phone visibility.
 
 Enabling this setting does not move an already running thread from a different
 server. Finish its turn and close its old runtime before reopening it against
