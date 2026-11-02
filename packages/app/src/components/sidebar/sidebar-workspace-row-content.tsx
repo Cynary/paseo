@@ -291,7 +291,7 @@ export const sidebarWorkspaceRowStyles = StyleSheet.create((theme) => ({
     flexShrink: 0,
   },
   shortcutBadge: {
-    minWidth: 18,
+    minWidth: { xs: 56, md: 40 },
     height: 18,
     paddingHorizontal: theme.spacing[1],
     alignItems: "center",
@@ -320,7 +320,7 @@ export const sidebarWorkspaceRowStyles = StyleSheet.create((theme) => ({
   },
   trailingActionSlotReserved: {
     position: "relative",
-    minWidth: 18,
+    minWidth: { xs: 56, md: 40 },
     minHeight: 20,
     flexShrink: 0,
     alignItems: "flex-end",
@@ -446,7 +446,11 @@ export function SidebarWorkspaceTrailingActionOverlay({
   return (
     <>
       {scrimBackdrop ? (
-        <TrailingActionScrim backdrop={scrimBackdrop} testID="sidebar-workspace-trailing-scrim" />
+        <TrailingActionScrim
+          backdrop={scrimBackdrop}
+          width={96}
+          testID="sidebar-workspace-trailing-scrim"
+        />
       ) : null}
       <View style={sidebarWorkspaceRowStyles.trailingActionOverlay}>{children}</View>
     </>

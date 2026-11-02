@@ -1,6 +1,12 @@
-import { useMemo, type ComponentProps, type PropsWithChildren, type ReactNode } from "react";
+import {
+  useCallback,
+  useMemo,
+  type ComponentProps,
+  type PropsWithChildren,
+  type ReactNode,
+} from "react";
 import { useTranslation } from "react-i18next";
-import { type PressableStateCallbackType } from "react-native";
+import { View, type GestureResponderEvent, type PressableStateCallbackType } from "react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import {
   Archive,
@@ -13,6 +19,8 @@ import {
   PinOff,
   Tag,
 } from "lucide-react-native";
+import { ToolbarButton } from "@/components/ui/pane-content-toolbar";
+import { useIsCompactFormFactor } from "@/constants/layout";
 import { isWeb } from "@/constants/platform";
 import { getForgePresentation, normalizeForge } from "@/git/forge";
 import type { SidebarWorkspaceEntry } from "@/hooks/use-sidebar-workspaces-list";
@@ -270,6 +278,14 @@ export function SidebarWorkspaceMenu({
   onOpenChange,
 }: SidebarWorkspaceMenuProps) {
   const { t } = useTranslation();
+  const isCompact = useIsCompactFormFactor();
+  const handleArchivePress = useCallback(
+    (event: GestureResponderEvent) => {
+      event.stopPropagation();
+      onArchive();
+    },
+    [onArchive],
+  );
   const workspaceTarget = useMemo<WorkspaceLabelTarget | null>(
     () =>
       serverId && workspaceId ? { serverId, workspaceId, labels: workspaceLabels ?? [] } : null,
@@ -277,44 +293,58 @@ export function SidebarWorkspaceMenu({
   );
   const pages = useWorkspaceLabelMenuPages(workspaceTarget);
   return (
-    <DropdownMenu compactMode="sheet" open={open} onOpenChange={onOpenChange}>
-      <DropdownMenuTrigger
-        hitSlop={8}
-        style={triggerStyle}
-        accessibilityRole={isWeb ? undefined : "button"}
-        accessibilityLabel={t("sidebar.workspace.actions.menu")}
-        testID={`sidebar-workspace-kebab-${workspaceKey}`}
+    <View style={styles.actions}>
+      <ToolbarButton
+        compact={isCompact}
+        label={archiveLabel ?? t("sidebar.workspace.actions.archive")}
+        tooltip={archiveStatus === "pending" ? archivePendingLabel : undefined}
+        shortcut={archiveShortcutKeys}
+        disabled={archiveStatus === "pending" || archiveStatus === "success"}
+        testID={`sidebar-workspace-archive-${workspaceKey}`}
+        style={styles.archiveButton}
+        onPress={handleArchivePress}
       >
-        {renderTriggerIcon}
-      </DropdownMenuTrigger>
-      <DropdownMenuContent
-        align="end"
-        width={260}
-        pages={pages}
-        sheetTitle={t("sidebar.workspace.actions.menu")}
-      >
-        <SidebarWorkspaceMenuItems
-          surface="dropdown"
-          workspaceKey={workspaceKey}
-          serverId={serverId}
-          workspaceId={workspaceId}
-          workspaceLabels={workspaceLabels}
-          onCopyPath={onCopyPath}
-          onCopyBranchName={onCopyBranchName}
-          onRename={onRename}
-          onMarkAsRead={onMarkAsRead}
-          onMarkAsUnread={onMarkAsUnread}
-          onArchive={onArchive}
-          archiveLabel={archiveLabel}
-          archiveStatus={archiveStatus}
-          archivePendingLabel={archivePendingLabel}
-          archiveShortcutKeys={archiveShortcutKeys}
-          isPinned={isPinned}
-          onTogglePin={onTogglePin}
-          openInFileManagerPath={openInFileManagerPath}
-        />
-      </DropdownMenuContent>
-    </DropdownMenu>
+        <ThemedArchive uniProps={triggerIconProps} />
+      </ToolbarButton>
+      <DropdownMenu compactMode="sheet" open={open} onOpenChange={onOpenChange}>
+        <DropdownMenuTrigger
+          hitSlop={8}
+          style={triggerStyle}
+          accessibilityRole={isWeb ? undefined : "button"}
+          accessibilityLabel={t("sidebar.workspace.actions.menu")}
+          testID={`sidebar-workspace-kebab-${workspaceKey}`}
+        >
+          {renderTriggerIcon}
+        </DropdownMenuTrigger>
+        <DropdownMenuContent
+          align="end"
+          width={260}
+          pages={pages}
+          sheetTitle={t("sidebar.workspace.actions.menu")}
+        >
+          <SidebarWorkspaceMenuItems
+            surface="dropdown"
+            workspaceKey={workspaceKey}
+            serverId={serverId}
+            workspaceId={workspaceId}
+            workspaceLabels={workspaceLabels}
+            onCopyPath={onCopyPath}
+            onCopyBranchName={onCopyBranchName}
+            onRename={onRename}
+            onMarkAsRead={onMarkAsRead}
+            onMarkAsUnread={onMarkAsUnread}
+            onArchive={onArchive}
+            archiveLabel={archiveLabel}
+            archiveStatus={archiveStatus}
+            archivePendingLabel={archivePendingLabel}
+            archiveShortcutKeys={archiveShortcutKeys}
+            isPinned={isPinned}
+            onTogglePin={onTogglePin}
+            openInFileManagerPath={openInFileManagerPath}
+          />
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </View>
   );
 }
 
@@ -437,6 +467,14 @@ function triggerStyle({ hovered = false }: PressableStateCallbackType & { hovere
 }
 
 const styles = StyleSheet.create((theme) => ({
+  actions: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: theme.spacing[1],
+  },
+  archiveButton: {
+    marginTop: { xs: -6, md: -1 },
+  },
   trigger: {
     // Larger on compact so the kebab is an easy tap target.
     width: { xs: 32, md: 18 },
