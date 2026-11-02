@@ -47,12 +47,16 @@ Conversation titles are synchronized on reopen. Pane splits, tab order, project
 icons, and other Paseo presentation preferences are not Codex project metadata
 and do not transfer to the phone.
 
-Phone discovery is still under investigation with Android app 1.2026.293:
-server-side projects and threads exist, but the phone's ordinary list can omit
-them. Legacy workspace metadata did not resolve this. Pinning a verification
-thread is being tested as a workaround for the behavior reported in
+Android app 1.2026.293 can omit server-side projects and threads from its
+ordinary list. Legacy workspace metadata did not resolve this. Pinning the
+verification thread made it visible, and the paired phone successfully sent
+messages through the shared server; Paseo received external turns and replies.
+This matches the behavior reported in
 [openai/codex#41470](https://github.com/openai/codex/issues/41470).
-Do not treat server-side project assignment as proof of phone visibility.
+Named thread sections are being tested for project-like grouping. Native project
+picker visibility is still unverified; server-side assignment alone does not
+prove that the phone will display a project. The fork does not automatically
+pin every conversation or overwrite user section assignments.
 
 Enabling this setting does not move an already running thread from a different
 server. Finish its turn and close its old runtime before reopening it against
