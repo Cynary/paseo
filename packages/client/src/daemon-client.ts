@@ -1,3 +1,4 @@
+import type { CodexRemoteControlAction } from "@getpaseo/protocol/codex-remote-control";
 import {
   ChunkedTransport,
   ChunkedTransportProtocolError,
@@ -5735,6 +5736,14 @@ export class DaemonClient {
       },
       responseType: "refresh_providers_snapshot_response",
       timeout: 120000,
+    });
+  }
+
+  async codexRemoteControl(provider: AgentProvider, action: CodexRemoteControlAction) {
+    return this.sendCorrelatedSessionRequest({
+      message: { type: "codex.remote_control.request", provider, action },
+      responseType: "codex.remote_control.response",
+      timeout: 90_000,
     });
   }
 

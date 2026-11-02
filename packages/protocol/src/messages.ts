@@ -1,3 +1,7 @@
+import {
+  CodexRemoteControlActionSchema,
+  CodexRemoteControlResultSchema,
+} from "./codex-remote-control.js";
 import { AgentMessageSchema } from "./agent-message.js";
 import {
   HostsListRequestSchema,
@@ -1852,6 +1856,17 @@ export const RefreshProvidersSnapshotRequestMessageSchema = z.object({
   requestId: z.string(),
 });
 
+export const CodexRemoteControlRequestSchema = z.object({
+  type: z.literal("codex.remote_control.request"),
+  provider: AgentProviderSchema,
+  action: CodexRemoteControlActionSchema,
+  requestId: z.string(),
+});
+export const CodexRemoteControlResponseSchema = z.object({
+  type: z.literal("codex.remote_control.response"),
+  payload: CodexRemoteControlResultSchema.extend({ requestId: z.string() }),
+});
+
 export const ProviderDiagnosticRequestMessageSchema = z.object({
   type: z.literal("provider_diagnostic_request"),
   provider: AgentProviderSchema,
@@ -3361,6 +3376,7 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
   GetProvidersSnapshotRequestMessageSchema,
   RefreshProvidersSnapshotRequestMessageSchema,
   ProviderDiagnosticRequestMessageSchema,
+  CodexRemoteControlRequestSchema,
   ProviderUsageListRequestMessageSchema,
   UsageListReportsRequestMessageSchema,
   ResumeAgentRequestMessageSchema,
@@ -3783,6 +3799,7 @@ export const ServerInfoStatusPayloadSchema = z
         agentThinkingUpdate: z.boolean().optional(),
         // COMPAT(daemonDiagnostics): added in v0.1.100, remove gate after 2026-12-25 once daemon floor >= v0.1.100.
         daemonDiagnostics: z.boolean().optional(),
+        codexRemoteControl: z.boolean().optional(),
         // COMPAT(daemonSelfUpdate): added in v0.1.93, remove gate after 2026-12-13.
         daemonSelfUpdate: z.boolean().optional(),
         // COMPAT(terminalsSurviveRestart): added in v0.12.0, remove gate after 2027-04-21.
@@ -7200,6 +7217,7 @@ export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
   ProvidersSnapshotUpdateMessageSchema,
   RefreshProvidersSnapshotResponseMessageSchema,
   ProviderDiagnosticResponseMessageSchema,
+  CodexRemoteControlResponseSchema,
   ProviderUsageListResponseMessageSchema,
   UsageListReportsUpdateMessageSchema,
   UsageListReportsResponseMessageSchema,

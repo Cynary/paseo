@@ -347,6 +347,19 @@ if (electronFlags) {
 }
 
 if (process.platform === "linux") {
+  const feature = "WaylandUnscaledTouchpadScrolling";
+  const enabled = app.commandLine.getSwitchValue("enable-features").split(",").filter(Boolean);
+  const disabled = app.commandLine.getSwitchValue("disable-features").split(",");
+  const hasOverride =
+    enabled.some((value) => value.split(/[<:]/)[0] === feature) || disabled.includes(feature);
+  if (!hasOverride) {
+    const factor = Number(process.env.PASEO_TOUCHPAD_SCROLL_FACTOR ?? "2.5");
+    if (!Number.isFinite(factor) || factor <= 0) {
+      throw new Error("PASEO_TOUCHPAD_SCROLL_FACTOR must be a positive number");
+    }
+    enabled.push(`${feature}:scroll_scaling_factor/${factor}`);
+    app.commandLine.appendSwitch("enable-features", enabled.join(","));
+  }
   // Keep the desktop/dock identity independent of the wrapped Electron filename.
   app.setDesktopName("Paseo.desktop");
   if (!app.commandLine.hasSwitch("class")) app.commandLine.appendSwitch("class", "Paseo");

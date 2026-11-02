@@ -1,3 +1,11 @@
+import { connectSharedCodexServer, sharedCodexEnabled } from "./codex/shared-server.js";
+import { codexPaseoHome, syncCodexProject } from "./codex/project-sync.js";
+import {
+  CodexRemoteControlStatusSchema,
+  CodexRemoteControlPairingSchema,
+  type CodexRemoteControlAction,
+  type CodexRemoteControlResult,
+} from "@getpaseo/protocol/codex-remote-control";
 import { validateProviderOptions } from "../provider-options.js";
 import {
   getAgentStreamEventTurnId,
@@ -296,6 +304,8 @@ interface CodexAppServerClientLike {
 }
 
 interface CodexAppServerAgentDeps {
+  paseoWorkspaceId?: string;
+  launchEnvironment?: Record<string, string>;
   environment?: Record<string, string>;
   workspaceGitService?: Pick<WorkspaceGitService, "resolveRepoRoot">;
   customProvider?: {
@@ -3674,6 +3684,7 @@ export class CodexAppServerAgentSession implements AgentSession {
 
       if (this.currentThreadId) {
         await this.ensureThreadLoaded();
+        await this.syncProject();
         await this.applyDefaultModelAndThinking();
       }
 
@@ -4113,7 +4124,7 @@ export class CodexAppServerAgentSession implements AgentSession {
     try {
       const loaded = toObjectRecord(await this.client.request("thread/loaded/list", {}));
       const ids = Array.isArray(loaded?.data) ? loaded.data : [];
-      if (ids.includes(this.currentThreadId)) {
+      if (ids.includes(this.currentThreadId) && !sharedCodexEnabled(this.deps.environment ?? {})) {
         return;
       }
       const response = await this.client.request("thread/resume", params);
@@ -5090,6 +5101,8 @@ export class CodexAppServerAgentSession implements AgentSession {
   }
 
   async canStopRuntime(): Promise<boolean> {
+    // Retain the subscription so phone-initiated turns continue to reach Paseo.
+    if (sharedCodexEnabled(this.deps.environment ?? {})) return false;
     if (
       !this.client ||
       this.client.hasPendingRequests() ||
@@ -5505,6 +5518,7 @@ export class CodexAppServerAgentSession implements AgentSession {
     this.config.model = model;
     this.reconcileServiceTier();
     this.config.thinkingOptionId = thinkingOptionId;
+    this.refreshResolvedCollaborationMode();
     return model;
   }
 
@@ -5515,6 +5529,8 @@ export class CodexAppServerAgentSession implements AgentSession {
     const model = await this.applyDefaultModelAndThinking();
 
     const { params, approvalPolicy, sandbox } = this.buildThreadStartRequest(model);
+    const projectId = await this.syncProject();
+    if (projectId) params.projectId = projectId;
     const rawResponse = await this.client.request("thread/start", params);
     this.rememberResolvedSandboxPolicy(rawResponse);
     const response = toObjectRecord(rawResponse);
@@ -5536,6 +5552,21 @@ export class CodexAppServerAgentSession implements AgentSession {
       this.cachedRuntimeInfo = null;
     }
     this.currentThreadId = threadId;
+  }
+
+  private async syncProject(): Promise<string | undefined> {
+    if (!this.client || !this.deps.paseoWorkspaceId || this.ephemeral) return;
+    const environment = this.deps.environment ?? {};
+    if (!sharedCodexEnabled(environment)) return;
+    const client = this.client;
+    return syncCodexProject({
+      request: (method, params) => client.request(method, params, 30_000),
+      paseoHome: codexPaseoHome(environment),
+      workspaceId: this.deps.paseoWorkspaceId,
+      threadId: this.currentThreadId,
+      title: this.config.title ?? null,
+      logger: this.logger,
+    });
   }
 
   private buildThreadStartRequest(model: string): {
@@ -5580,6 +5611,14 @@ export class CodexAppServerAgentSession implements AgentSession {
         mcpServers[name] = toCodexMcpConfig(serverConfig);
       }
       innerConfig.mcp_servers = mcpServers;
+    }
+    if (sharedCodexEnabled(this.deps.environment ?? {}) && this.deps.launchEnvironment) {
+      const policy = toObjectRecord(innerConfig.shell_environment_policy) ?? {};
+      const existingSet = toObjectRecord(policy.set) ?? {};
+      innerConfig.shell_environment_policy = {
+        ...policy,
+        set: { ...existingSet, ...this.deps.launchEnvironment },
+      };
     }
     const configured = applyCodexToolPolicy(innerConfig, this.config.toolPolicy);
     return Object.keys(configured).length > 0 ? configured : null;
@@ -7402,6 +7441,33 @@ export class CodexAppServerAgentClient implements AgentClient {
     private readonly deps: CodexAppServerAgentDeps = {},
   ) {}
 
+  async remoteControl(action: CodexRemoteControlAction): Promise<CodexRemoteControlResult> {
+    if (!sharedCodexEnabled(buildCodexAppServerEnv(this.runtimeSettings))) {
+      throw new Error("Enable the shared Codex server before pairing your phone.");
+    }
+    const child = await this.spawnAppServer();
+    const client = new CodexAppServerClient(child, this.logger);
+    try {
+      await client.request("initialize", buildCodexAppServerInitializeParams(), 15_000);
+      client.notify("initialized", {});
+      if (action === "enable" || action === "disable") {
+        await client.request(`remoteControl/${action}`, { ephemeral: false }, 30_000);
+      }
+      const pairing =
+        action === "pair"
+          ? CodexRemoteControlPairingSchema.parse(
+              await client.request("remoteControl/pairing/start", { manualCode: true }, 40_000),
+            )
+          : null;
+      const state = CodexRemoteControlStatusSchema.parse(
+        await client.request("remoteControl/status/read", {}, 15_000),
+      );
+      return { state, pairing };
+    } finally {
+      await client.dispose();
+    }
+  }
+
   private sessionDeps(launchEnv: Record<string, string> | undefined): CodexAppServerAgentDeps {
     return {
       ...this.deps,
@@ -7471,6 +7537,15 @@ export class CodexAppServerAgentClient implements AgentClient {
     options?: { goalsEnabled?: boolean; agentId?: string; environment?: Record<string, string> },
   ): Promise<ChildProcessWithoutNullStreams> {
     const launchPrefix = await resolveCodexLaunchPrefix(this.runtimeSettings);
+    const hostEnvironment = buildCodexAppServerEnv(this.runtimeSettings);
+    if (sharedCodexEnabled(hostEnvironment)) {
+      return connectSharedCodexServer({
+        command: launchPrefix.command,
+        args: launchPrefix.args,
+        environment: hostEnvironment,
+        goalsEnabled: await this.resolveGoalsEnabled(),
+      });
+    }
     const args = [...launchPrefix.args, "app-server"];
     if (options?.goalsEnabled) {
       args.push("--enable", "goals");
@@ -7519,7 +7594,12 @@ export class CodexAppServerAgentClient implements AgentClient {
           agentId: launchContext?.agentId,
           environment,
         }),
-      { ...this.sessionDeps(launchContext?.env), environment },
+      {
+        ...this.sessionDeps(launchContext?.env),
+        environment,
+        paseoWorkspaceId: launchContext?.workspaceId ?? undefined,
+        launchEnvironment: launchContext?.env,
+      },
       options?.persistSession === false,
       goalsEnabled,
       autoReviewEnabled,
@@ -7556,7 +7636,12 @@ export class CodexAppServerAgentClient implements AgentClient {
           agentId: launchContext?.agentId,
           environment,
         }),
-      { ...this.sessionDeps(launchContext?.env), environment },
+      {
+        ...this.sessionDeps(launchContext?.env),
+        environment,
+        paseoWorkspaceId: launchContext?.workspaceId ?? undefined,
+        launchEnvironment: launchContext?.env,
+      },
       false,
       goalsEnabled,
       autoReviewEnabled,

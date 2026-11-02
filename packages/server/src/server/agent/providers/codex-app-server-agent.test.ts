@@ -1314,6 +1314,26 @@ describe("Codex app-server provider", () => {
     }
   });
 
+  test("resolves the default model into collaboration settings before the first turn", async () => {
+    const appServer = createFakeCodexAppServer({
+      "collaborationMode/list": () => ({
+        data: [{ name: "Default", mode: "default", model: null }],
+      }),
+    });
+    const session = await createProviderWithFakeAppServer(appServer).createSession(
+      createConfig({ model: undefined }),
+    );
+    try {
+      await session.startTurn("first turn without an explicit model");
+      await expect(appServer.waitForTurnStart()).resolves.toMatchObject({
+        collaborationMode: { settings: { model: "gpt-5.4" } },
+      });
+      appServer.assertNoErrors();
+    } finally {
+      await session.close();
+    }
+  });
+
   test("provider persistence leaves options owned by the stored agent config", async () => {
     const appServer = createFakeCodexAppServer();
     const provider = createProviderWithFakeAppServer(appServer);

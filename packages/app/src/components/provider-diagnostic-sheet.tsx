@@ -1,3 +1,4 @@
+import { CodexRemoteControlCard } from "@/screens/settings/codex-remote-control-card";
 import * as Clipboard from "expo-clipboard";
 import { AlertTriangle, Copy, FileText, Plus, RotateCw, Trash2 } from "lucide-react-native";
 import type { TFunction } from "i18next";
@@ -697,6 +698,9 @@ export function ProviderDiagnosticSheet({
         })}
         snapPoints={MAIN_SNAP_POINTS}
       >
+        {visible && provider === "codex" ? (
+          <CodexRemoteControlCard serverId={serverId} provider={provider} />
+        ) : null}
         <ProviderModalBody
           discoveredCount={discoveredModels.length}
           additionalCount={additionalModels.length}

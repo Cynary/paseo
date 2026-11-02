@@ -452,6 +452,31 @@ export class ProviderCatalogSession {
     });
   }
 
+  async handleCodexRemoteControlRequest(
+    msg: Extract<SessionInboundMessage, { type: "codex.remote_control.request" }>,
+  ): Promise<void> {
+    try {
+      const result = await this.providerSnapshotManager.codexRemoteControl(
+        msg.provider,
+        msg.action,
+      );
+      this.host.emit({
+        type: "codex.remote_control.response",
+        payload: { ...result, requestId: msg.requestId },
+      });
+    } catch (error) {
+      this.host.emit({
+        type: "rpc_error",
+        payload: {
+          requestId: msg.requestId,
+          requestType: msg.type,
+          error: error instanceof Error ? error.message : String(error),
+          code: "codex_remote_control_failed",
+        },
+      });
+    }
+  }
+
   async handleProviderDiagnosticRequest(
     msg: Extract<SessionInboundMessage, { type: "provider_diagnostic_request" }>,
   ): Promise<void> {

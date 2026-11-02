@@ -5579,6 +5579,7 @@ export class AgentManager {
       labels?: Record<string, string>;
     },
   ): Promise<AgentLaunchContext> {
+    const workspaceId = opening?.workspaceId;
     // A plugin changing during this open must still make the resulting session stale.
     const generation = this.sessionOpenGeneration;
     this.detachPluginTools(agentId);
@@ -5589,7 +5590,7 @@ export class AgentManager {
         agentId,
         provider: client.provider,
         cwd,
-        workspaceId: opening?.workspaceId ?? null,
+        workspaceId: workspaceId ?? null,
         reason: opening?.reason ?? "resume",
         purpose: opening?.purpose ?? "interactive",
         env: { ...env },
@@ -5608,6 +5609,7 @@ export class AgentManager {
     }
     const context: AgentLaunchContext = {
       agentId,
+      workspaceId,
       mcpServers,
       mcpServerOwners,
       env: {

@@ -1,3 +1,7 @@
+import type {
+  CodexRemoteControlAction,
+  CodexRemoteControlResult,
+} from "@getpaseo/protocol/codex-remote-control";
 import { normalizeAgentModelCatalog } from "@getpaseo/protocol/agent-types";
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
@@ -568,6 +572,18 @@ export class ProviderSnapshotManager {
       unattended: input.unattended || parent?.isUnattended === true,
       availableModes: entry.modes ?? [],
     });
+  }
+
+  async codexRemoteControl(
+    provider: AgentProvider,
+    action: CodexRemoteControlAction,
+  ): Promise<CodexRemoteControlResult> {
+    const definition = this.generation.definitions[provider];
+    if (!definition?.enabled) throw new Error(`Provider ${provider} is not enabled`);
+    const client = this.ensureClient(provider, definition);
+    if (!client.remoteControl)
+      throw new Error(`Provider ${provider} does not support Codex Remote Control`);
+    return client.remoteControl(action);
   }
 
   async getProviderDiagnostic(provider: AgentProvider): Promise<ProviderDiagnosticResult> {

@@ -1,4 +1,8 @@
 import type {
+  CodexRemoteControlAction,
+  CodexRemoteControlResult,
+} from "@getpaseo/protocol/codex-remote-control";
+import type {
   AgentFeature,
   AgentFeatureSelect,
   AgentFeatureToggle,
@@ -623,6 +627,7 @@ export interface AgentSessionConfig {
 }
 
 export interface AgentLaunchContext {
+  workspaceId?: string | null;
   /** Launch-only plugin MCP servers and their owners; never persisted. */
   mcpServers?: Record<string, McpServerConfig>;
   mcpServerOwners?: Record<string, string>;
@@ -762,6 +767,7 @@ export interface ResolveAgentDefaultModeInput {
 }
 
 export interface AgentClient {
+  remoteControl?(action: CodexRemoteControlAction): Promise<CodexRemoteControlResult>;
   readonly provider: AgentProvider;
   readonly capabilities: AgentCapabilityFlags;
   createSession(
