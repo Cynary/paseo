@@ -53,10 +53,11 @@ verification thread made it visible, and the paired phone successfully sent
 messages through the shared server; Paseo received external turns and replies.
 This matches the behavior reported in
 [openai/codex#41470](https://github.com/openai/codex/issues/41470).
-Named thread sections are being tested for project-like grouping. Native project
-picker visibility is still unverified; server-side assignment alone does not
-prove that the phone will display a project. The fork does not automatically
-pin every conversation or overwrite user section assignments.
+The test conversation subsequently remained visible under its normal project
+after its temporary section assignment was removed. The empty test section was
+deleted. Android displays the folder basename instead of the custom project name
+([openai/codex#36754](https://github.com/openai/codex/issues/36754)). The fork does
+not automatically pin conversations or create duplicate project sections.
 
 Enabling this setting does not move an already running thread from a different
 server. Finish its turn and close its old runtime before reopening it against
@@ -94,3 +95,107 @@ and server survival after disconnecting a client. The test performs no
 authenticated model calls. Codex 0.166 can reject a resume of a newly started
 thread before its first turn has finished initializing its history; retry after
 that first turn finishes.
+
+## One-time import and machine transfer
+
+Run these repository scripts with Python 3.10+ and the fork's Node/npm dependencies
+installed. `codex-history-import.py` understands Codex 0.166's `state_5.sqlite` and
+`thread_history_1.sqlite`; it refuses differing table columns. Initialize the
+destination home once with the same Codex version before merging.
+
+There are two separate steps: merge Codex history while both homes are offline,
+then register conversations with a running Paseo daemon. If Paseo uses the existing
+Codex home directly, skip the merge entirely. No UI or Electron process is required
+on a headless host.
+
+### t14s: merge the original home into the paired fork
+
+From the fork checkout, preview without changing either home:
+
+```sh
+python3 scripts/codex-history-import.py \
+  --source "$HOME/.codex" --target "$HOME/.codex-paseo"
+```
+
+Close the original Codex/Paseo applications and stop their app-server processes
+before applying. Also stop the fork daemon and its persistent shared app-server;
+closing just its desktop window does not stop that server. Its PID is recorded
+under `$HOME/.paseo-fork/runtime/codex/<identity>/server.pid`. Do not stop the server
+that owns a conversation still doing work, including an ongoing import-setup task.
+On Linux the importer refuses an apply if another process has either history
+database open.
+
+```sh
+python3 scripts/codex-history-import.py \
+  --source "$HOME/.codex" --target "$HOME/.codex-paseo" --apply
+```
+
+This adds missing thread IDs and their paginated history, projects, sections,
+and rollout files. Existing thread IDs are skipped wholesale; this is not a
+merge of two independently edited versions of a conversation. Archived threads
+remain archived in Codex. Destination databases are backed up under
+`paseo-import-backups/<timestamp>/`, and a failed database merge rolls back its
+rows and newly copied files. Keep both homes offline throughout the operation.
+The source is unchanged. Authentication, Remote Control pairing, settings,
+memories, goals, queues, and machine-local execution state are not imported.
+
+Start the fork again. Automatic discovery imports recent eligible conversations.
+For an explicit complete registration without the recent-list window limit:
+
+```sh
+npx tsx scripts/codex-bulk-import.mts \
+  --home "$HOME/.paseo-fork" --codex-home "$HOME/.codex-paseo" --apply
+```
+
+Omit `--apply` for a preview. This skips archived Codex conversations, provider
+subagents, metadata-generation helpers, and conversations already registered in
+Paseo (including archived Paseo records). It registers project roots/names when
+not already present and uses Paseo's normal workspace import for each conversation.
+Existing Paseo organization takes precedence. Multi-root project layout and pane
+layout are not transferred. Failures are reported per item and produce a nonzero
+exit status; rerunning skips successful imports. Missing working directories must
+be restored or mapped before import.
+
+### Headless devbox using its existing Codex home
+
+Stop the old app-server. Configure the fork's Codex provider with
+`PASEO_CODEX_SHARED_SERVER=1` and `CODEX_HOME` pointing at the existing home, then
+start the Paseo daemon normally. Run the registration step on that machine:
+
+```sh
+npx tsx scripts/codex-bulk-import.mts \
+  --home "$HOME/.paseo" --codex-home "$HOME/.codex" --apply
+```
+
+The daemon persists Paseo projects/workspaces in its own home. Pair its shared
+server independently if phone control is wanted. Do not reuse another machine's
+Remote Control enrollment.
+
+### Move conversations to another machine
+
+With the source app-server stopped, export a portable directory:
+
+```sh
+python3 scripts/codex-history-import.py \
+  --source "$HOME/.codex-paseo" --export /path/to/new-history-export
+```
+
+Transfer that directory with `rsync` or `scp`. It contains private conversation
+history, but excludes authentication files and strips Remote Control enrollment
+from the exported state database. Repositories and external attachments are not
+included. Copy/clone the repositories separately.
+
+On the destination, initialize a Codex home, stop its app-server, then merge:
+
+```sh
+python3 scripts/codex-history-import.py \
+  --source /path/to/new-history-export --target "$HOME/.codex" \
+  --map-path /home/olduser/Projects=/home/newuser/Projects --apply
+```
+
+`--map-path` is repeatable; the longest matching path prefix wins. It updates
+working directories, project roots, structured session metadata, and sandbox
+paths while adjusting history byte offsets for changed rollout metadata. Old
+paths in historical message text remain historical text. Then start Paseo and
+run `codex-bulk-import.mts` as above. This is a copy/import, not ongoing sync;
+keep the old copy inactive once work continues on the new machine.
